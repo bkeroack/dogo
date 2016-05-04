@@ -31,7 +31,7 @@ const (
 	appName = "dogo"
 )
 
-// This represents the base command when called without any subcommands
+// RootCmd represents the base command when called without any subcommands
 var RootCmd = &cobra.Command{
 	Use:   appName,
 	Short: "Distributed memcache-compatible datastore",
@@ -40,6 +40,7 @@ var RootCmd = &cobra.Command{
 	fast reads and safe, distributed writes.`,
 }
 
+// Execute is the entry point for the application
 func Execute() {
 	if err := RootCmd.Execute(); err != nil {
 		fmt.Println(err)

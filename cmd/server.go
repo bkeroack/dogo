@@ -30,7 +30,19 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var serverConfig nodeConfig
+var serverConfig NodeConfig
+var tcpListener = NodeListener{
+	Type:    "tcp",
+	Handler: &memcacheHandler{},
+}
+var unixListener = NodeListener{
+	Type:    "unix",
+	Handler: &memcacheHandler{},
+}
+var tcpPort uint16
+var tcpAddr string
+var unixSocketPath string
+var socketListen bool
 
 // serverCmd represents the server command
 var serverCmd = &cobra.Command{
@@ -61,30 +73,35 @@ machine. For remote clients, run a separate instance on each machine and form a
 coherent cluster from them all. If clients are connecting remotely you may be
 better off using standard memcache/redis/etc. For more info, see documentation.
 `
-	fmt.Fprintf(os.Stderr, warnmsg, serverConfig.bindaddress, appName)
+	fmt.Fprintf(os.Stderr, warnmsg, &tcpAddr, appName)
 }
 
 func init() {
-	serverCmd.PersistentFlags().BoolVarP(&serverConfig.persistent, "persistent", "p", false, "Use persistent (disk) storage")
-	serverCmd.PersistentFlags().Uint16VarP(&serverConfig.port, "port", "o", 11222, "TCP port to listen on for client traffic")
-	serverCmd.PersistentFlags().StringVarP(&serverConfig.bindaddress, "bind-addr", "b", "localhost", "Listen on this address")
-	serverCmd.PersistentFlags().BoolVarP(&serverConfig.usock, "unix-socket", "u", false, "Listen on Unix socket instead of TCP")
-	serverCmd.PersistentFlags().StringVarP(&serverConfig.sockpath, "socket-path", "s", randomSocketName(), "Unix socket path")
-	serverCmd.PersistentFlags().StringVarP(&serverConfig.datapath, "data-path", "d", "/tmp/dogo", "Data path (if persistent). Must exist and be writable.")
-	serverCmd.PersistentFlags().StringVarP(&serverConfig.raftaddr, "raft-addr", "r", "0.0.0.0:48761", "address/port to listen on for Raft consensus traffic (must be the same for all nodes in cluster)")
-	serverCmd.PersistentFlags().StringVarP(&serverConfig.joinaddr, "join-addr", "j", "", "address/port of the cluster leader to join")
-	serverCmd.PersistentFlags().BoolVarP(&serverConfig.verifytls, "verify-tls", "f", true, "Verify TLS certificates for Raft traffic")
+	serverCmd.PersistentFlags().BoolVarP(&serverConfig.Persistent, "persistent", "p", false, "Use persistent (disk) storage")
+	serverCmd.PersistentFlags().Uint16VarP(&tcpPort, "port", "o", 11211, "TCP port to listen on for client traffic")
+	serverCmd.PersistentFlags().StringVarP(&tcpAddr, "bind-addr", "b", "localhost", "Listen on this address")
+	serverCmd.PersistentFlags().BoolVarP(&socketListen, "unix-socket", "u", false, "Listen on Unix socket instead of TCP")
+	serverCmd.PersistentFlags().StringVarP(&unixSocketPath, "socket-path", "s", randomSocketName(), "Unix socket path")
+	serverCmd.PersistentFlags().StringVarP(&serverConfig.DataPath, "data-path", "d", "/tmp/dogo", "Path for data and raft state. Must exist and be writable.")
+	serverCmd.PersistentFlags().StringVarP(&serverConfig.RaftAddr, "raft-addr", "r", "0.0.0.0:48761", "address/port to listen on for Raft consensus traffic (must be the same for all nodes in cluster)")
+	serverCmd.PersistentFlags().StringVarP(&serverConfig.JoinAddr, "join-addr", "j", "", "address/port of the cluster leader to join")
+	serverCmd.PersistentFlags().BoolVarP(&serverConfig.RaftVerifyTLS, "verify-tls", "f", true, "Verify TLS certificates for Raft traffic")
 	RootCmd.AddCommand(serverCmd)
 }
 
 func server(cmd *cobra.Command, args []string) {
-	if !serverConfig.usock {
-		if serverConfig.bindaddress != "localhost" && serverConfig.bindaddress != "127.0.0.1" && serverConfig.bindaddress != "::1" {
+	if socketListen {
+		unixListener.Addr = unixSocketPath
+		serverConfig.Listener = &unixListener
+	} else {
+		if tcpAddr != "localhost" && tcpAddr != "127.0.0.1" && tcpAddr != "::1" {
 			displayBindWarning()
 		}
+		tcpListener.Addr = fmt.Sprintf("%v:%v", tcpAddr, tcpPort)
+		serverConfig.Listener = &tcpListener
 	}
-	err := serverConfig.RunNode()
-	if err != nil {
+	node := NewNode(&serverConfig)
+	if err := node.RunNode(true); err != nil {
 		log.Printf("error running node; %v", err)
 		os.Exit(1)
 	}
