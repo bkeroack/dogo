@@ -64,7 +64,6 @@ var reqTables = map[string]string{
 											 size_bytes INTEGER,
 											 flags INTEGER,
 											 exptime INTEGER,
-											 exptime_nano INTEGER,
 											 created INTEGER,
 											 created_nano INTEGER,
 											 last_used INTEGER,
@@ -125,6 +124,12 @@ func newBadQueryError(err error) error {
 
 func newInternalErrorError(err error) error {
 	return internalErrorError{err: err}
+}
+
+// Given Unix timestamp and UnixNano timestamp of same instant, compute
+// the nanoseconds remainder
+func remainderNano(unix int64, nano int64) int64 {
+	return nano - (unix * 1000000000)
 }
 
 // NewNode creates a new Node object but does not initialize or start it
@@ -206,7 +211,7 @@ func (n *Node) execute(q string, txn bool) (leader bool, exerr error) {
 		return true, newInternalErrorError(err)
 	}
 	if res[0].Error != "" {
-		return true, newBadQueryError(err)
+		return true, newBadQueryError(fmt.Errorf(res[0].Error))
 	}
 	return true, nil
 }
@@ -241,6 +246,34 @@ func (n *Node) ExpireValue(key string) error {
 	return nil
 }
 
+func getString(val interface{}) (string, error) {
+	switch v := val.(type) {
+	case string:
+		return v, nil
+	default:
+		return "", fmt.Errorf("unexpected type: %T", val)
+	}
+}
+
+func getInt64(val interface{}) (int64, error) {
+	switch v := val.(type) {
+	case int64:
+		return v, nil
+	default:
+		return 0, fmt.Errorf("unexpected type: %T", val)
+	}
+}
+
+func getValue(val interface{}) ([]byte, error) {
+	switch v := val.(type) {
+	case string: //wtf
+		log.Printf("val is a string: %v", v)
+		return []byte(v), nil
+	default:
+		return []byte{}, fmt.Errorf("unexpected type: %T", val)
+	}
+}
+
 // FetchItems retrieves items from the datastore
 func (n *Node) FetchItems(keys []string, fast bool) ([]*Item, error) {
 	var clvl rqlite.ConsistencyLevel
@@ -249,14 +282,13 @@ func (n *Node) FetchItems(keys []string, fast bool) ([]*Item, error) {
 	} else {
 		clvl = rqlite.Strong
 	}
-	q := `SELECT key, value, size_bytes, flags, exptime, exptime_nano FROM key_value_map WHERE`
+	q := `SELECT key, value, size_bytes, flags, exptime FROM key_value_map WHERE`
 	where := []string{}
 	for _, k := range keys {
 		where = append(where, "key", "=", fmt.Sprintf("'%v'", k), "OR")
 	}
 	where = where[0 : len(where)-1] //drop last "OR"
 	q = fmt.Sprintf("%v %v;", q, strings.Join(where, " "))
-	log.Printf("query: %v", q)
 	rows, err := n.store.Query([]string{q}, false, false, clvl)
 	if err != nil {
 		if err == rqlite.ErrNotLeader {
@@ -273,18 +305,40 @@ func (n *Node) FetchItems(keys []string, fast bool) ([]*Item, error) {
 	}
 	items := []*Item{}
 	for _, v := range rows[0].Values {
-		//TODO: safer type asserts
-		key := v[0].(string)
-		expires := time.Unix(v[4].(int64), v[5].(int64))
+		key, err := getString(v[0])
+		if err != nil {
+			return []*Item{}, newInternalErrorError(fmt.Errorf("key: %v", err))
+		}
+		exp, err := getInt64(v[4])
+		if err != nil {
+			return []*Item{}, newInternalErrorError(fmt.Errorf("expires: %v", err))
+		}
+		expires := time.Unix(exp, 0)
 		if time.Now().After(expires) {
+			log.Printf("expiring value: %v", key)
 			go n.ExpireValue(key)
 			continue
 		}
+		value, err := getValue(v[1])
+		if err != nil {
+			return []*Item{}, newInternalErrorError(fmt.Errorf("value: %v", err))
+		}
+		flags, err := getInt64(v[3])
+		if err != nil {
+			return []*Item{}, newInternalErrorError(fmt.Errorf("flags: %v", err))
+		}
+		size, err := getInt64(v[2])
+		if err != nil {
+			return []*Item{}, newInternalErrorError(fmt.Errorf("size: %v", err))
+		}
+		if size <= 0 {
+			return []*Item{}, newInternalErrorError(fmt.Errorf("bad size (must be >= 1): %v", size))
+		}
 		item := &Item{
 			Name:       key,
-			Value:      v[1].([]byte),
-			Size:       uint64(v[2].(int64)),
-			Flags:      v[3].(int64),
+			Value:      value,
+			Size:       uint64(size),
+			Flags:      flags,
 			Expiration: expires,
 		}
 		items = append(items, item)
@@ -294,25 +348,27 @@ func (n *Node) FetchItems(keys []string, fast bool) ([]*Item, error) {
 
 //StoreItem stores an item in the datastore
 func (n *Node) StoreItem(item *Item) error {
-	q := `INSERT INTO key_value_map (key, value, size_bytes, flags, exptime, exptime_nano, created, created_nano, last_used, last_used_nano)
+	q := `INSERT INTO key_value_map (key, value, size_bytes, flags, exptime, created, created_nano, last_used, last_used_nano)
 	      VALUES (`
 	now := time.Now()
+	nu := now.Unix()
+	nn := remainderNano(nu, now.UnixNano())
 	values := []string{
-		item.Name,
+		fmt.Sprintf("'%v'", item.Name),
 		fmt.Sprintf("X'%v'", hex.EncodeToString(item.Value)),
 		fmt.Sprintf("%v", item.Size),
 		fmt.Sprintf("%v", item.Flags),
 		fmt.Sprintf("%v", item.Expiration.Unix()),
-		fmt.Sprintf("%v", item.Expiration.UnixNano()),
-		fmt.Sprintf("%v", now.Unix()),
-		fmt.Sprintf("%v", now.UnixNano()),
-		fmt.Sprintf("%v", now.Unix()),
-		fmt.Sprintf("%v", now.UnixNano()),
+		fmt.Sprintf("%v", nu),
+		fmt.Sprintf("%v", nn),
+		fmt.Sprintf("%v", nu),
+		fmt.Sprintf("%v", nn),
 	}
 	q = fmt.Sprintf("%v%v);", q, strings.Join(values, ", "))
+	log.Printf("store query: %v", q)
 	ldr, err := n.execute(q, false)
 	if err != nil {
-		return err
+		return fmt.Errorf("error running node execute: %v", err)
 	}
 	if !ldr {
 		return n.ProxyStore(item)

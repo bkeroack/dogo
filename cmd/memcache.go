@@ -267,12 +267,12 @@ func (ch *memcacheHandler) set(cmdline []string) error {
 	item.Value = data
 	err = ch.n.StoreItem(&item)
 	if err != nil {
-		return newInternalErrorError(err)
+		return newInternalErrorError(fmt.Errorf("error storing item: %v", err))
 	}
 	if !noreply {
 		_, err = ch.conn.Write([]byte("STORED\r\n"))
 		if err != nil {
-			return err
+			return fmt.Errorf("error writing STORED: %v", err)
 		}
 	}
 	return nil
