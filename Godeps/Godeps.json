@@ -1,0 +1,73 @@
+{
+	"ImportPath": "github.com/bkeroack/dogo",
+	"GoVersion": "go1.6",
+	"GodepVersion": "v63",
+	"Deps": [
+		{
+			"ImportPath": "github.com/armon/go-metrics",
+			"Rev": "f303b03b91d770a11a39677f1d3b55da4002bbcb"
+		},
+		{
+			"ImportPath": "github.com/boltdb/bolt",
+			"Comment": "v1.2.0-21-gd974993",
+			"Rev": "d97499360d1ecebc492ea66c7447ea948f417620"
+		},
+		{
+			"ImportPath": "github.com/dollarshaveclub/go-lib/set",
+			"Rev": "ca461381870590a71f824fb2dade2367c3d27393"
+		},
+		{
+			"ImportPath": "github.com/hashicorp/go-msgpack/codec",
+			"Rev": "fa3f63826f7c23912c15263591e65d54d080b458"
+		},
+		{
+			"ImportPath": "github.com/hashicorp/raft",
+			"Rev": "1c84b7ca86424d341b95457cf6da85fdb367c4f0"
+		},
+		{
+			"ImportPath": "github.com/hashicorp/raft-boltdb",
+			"Rev": "d1e82c1ec3f15ee991f7cc7ffd5b67ff6f5bbaee"
+		},
+		{
+			"ImportPath": "github.com/inconshreveable/mousetrap",
+			"Rev": "76626ae9c91c4f2a10f34cad8ce83ea42c93bb75"
+		},
+		{
+			"ImportPath": "github.com/mattn/go-sqlite3",
+			"Comment": "v1.1.0-62-g467f50b",
+			"Rev": "467f50b0c026317ad28fc2c0a08aab6f755cfc7a"
+		},
+		{
+			"ImportPath": "github.com/otoolep/rqlite/db",
+			"Comment": "v2.2.2-26-g60103f1",
+			"Rev": "60103f1d24965f04b4290eeff38faca0786681e3"
+		},
+		{
+			"ImportPath": "github.com/otoolep/rqlite/http",
+			"Comment": "v2.2.2-26-g60103f1",
+			"Rev": "60103f1d24965f04b4290eeff38faca0786681e3"
+		},
+		{
+			"ImportPath": "github.com/otoolep/rqlite/store",
+			"Comment": "v2.2.2-26-g60103f1",
+			"Rev": "60103f1d24965f04b4290eeff38faca0786681e3"
+		},
+		{
+			"ImportPath": "github.com/otoolep/rqlite/tcp",
+			"Comment": "v2.2.2-26-g60103f1",
+			"Rev": "60103f1d24965f04b4290eeff38faca0786681e3"
+		},
+		{
+			"ImportPath": "github.com/spf13/cobra",
+			"Rev": "4c05eb1145f16d0e6bb4a3e1b6d769f4713cb41f"
+		},
+		{
+			"ImportPath": "github.com/spf13/pflag",
+			"Rev": "8f6a28b0916586e7f22fe931ae2fcfc380b1c0e6"
+		},
+		{
+			"ImportPath": "golang.org/x/sys/unix",
+			"Rev": "b776ec39b3e54652e09028aaaaac9757f4f8211a"
+		}
+	]
+}
