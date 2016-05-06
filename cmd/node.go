@@ -315,10 +315,6 @@ func (n *Node) FetchItems(keys []string, clvl ConsistencyLevel) ([]*Item, error)
 	return items, nil
 }
 
-// set - store item unconditionally (insert or update if exists)
-// add - store item only if not exists (insert if not exists)
-// replace - store item only if exists (update if exists)
-
 //StoreItem stores an item in the datastore.
 // replace: overwrite item if it already exists, otherwise return error
 // implementing KeyExists
@@ -329,10 +325,10 @@ func (n *Node) StoreItem(item *Item, policy StorePolicy) error {
 	case InsertIfNotExists:
 		return n.storeInsertIfNotExists(item)
 	case UpdateIfExists:
+		return n.storeUpdateIfExists(item)
 	default:
 		return newInternalErrorError(fmt.Errorf("unknown StorePolicy: %v", policy))
 	}
-	return nil
 }
 
 func (n *Node) storeInsertOrUpdate(item *Item) error {
