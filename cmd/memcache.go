@@ -220,7 +220,7 @@ func (ch *memcacheHandler) stub(cmdline []string) error {
 
 func (ch *memcacheHandler) get(cmdline []string) error {
 	log.Printf("%v", cmdline)
-	items, err := ch.n.FetchItems(cmdline[1:len(cmdline)], true)
+	items, err := ch.n.FetchItems(cmdline[1:len(cmdline)], None)
 	if err != nil {
 		return err
 	}
@@ -265,7 +265,7 @@ func (ch *memcacheHandler) set(cmdline []string) error {
 		return newClientError(fmt.Errorf("data length (%v) does not equal declared length (%v)", len(data), size))
 	}
 	item.Value = data
-	err = ch.n.StoreItem(&item)
+	err = ch.n.StoreItem(&item, InsertOrUpdate)
 	if err != nil {
 		return newInternalErrorError(fmt.Errorf("error storing item: %v", err))
 	}

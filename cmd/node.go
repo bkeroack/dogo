@@ -18,6 +18,25 @@ import (
 	rqlite "github.com/otoolep/rqlite/store"
 )
 
+// StorePolicy represents desired behavior of a store operation
+type StorePolicy int
+
+// ConsistencyLevel represents the desired consistency of an operation
+type ConsistencyLevel int
+
+// Store operation semantics
+const (
+	InsertOrUpdate    StorePolicy = iota // Insert if not exists or update existing item
+	InsertIfNotExists                    //Insert only if it doesn't already exist
+	UpdateIfExists                       //Update only if it already exists
+)
+
+// Represents desired operation consistency
+const (
+	None   ConsistencyLevel = iota // No guaranteed consistency (fast: query local store only)
+	Strong                         // Put operation through Raft state machine (slower but consistent)
+)
+
 //ConnectionHandler handles new incoming connections
 type ConnectionHandler interface {
 	NewConnection(*Node, net.Conn) //Called for each new connection (new goroutine)
@@ -71,65 +90,12 @@ var reqTables = map[string]string{
 											 );`,
 }
 
-// BadQuery is implemented by any error returned as a result of malformed
-// query (syntax error, etc).
-//
-// Use by doing a checked type assertion (below assumes err != nil):
-//
-// bq, ok := err.(BadQuery)
-// if ok && bq.BadQuery() {
-//		// error was caused by a bad query
-// } else {
-//    // not a bad query error
-// }
-//
-// see: http://dave.cheney.net/2014/12/24/inspecting-errors
-type BadQuery interface {
-	BadQuery() bool
-}
-
-type badQueryError struct {
-	err error
-}
-
-func (bqe badQueryError) BadQuery() bool {
-	return true
-}
-
-func (bqe badQueryError) Error() string {
-	return bqe.err.Error()
-}
-
-// InternalError is implemented by errors returned for internal/unspecified
-// errors (see BadQuery for usage)
-type InternalError interface {
-	InternalError() bool
-}
-
-type internalErrorError struct {
-	err error
-}
-
-func (iee internalErrorError) InternalError() bool {
-	return true
-}
-
-func (iee internalErrorError) Error() string {
-	return iee.err.Error()
-}
-
-func newBadQueryError(err error) error {
-	return badQueryError{err: err}
-}
-
-func newInternalErrorError(err error) error {
-	return internalErrorError{err: err}
-}
-
-// Given Unix timestamp and UnixNano timestamp of same instant, compute
-// the nanoseconds remainder
-func remainderNano(unix int64, nano int64) int64 {
-	return nano - (unix * 1000000000)
+// nowTimestamp returns unix timestamp and nanosecond remainder for the current time
+func nowTimestamp() (unix int64, nanoRemainder int64) {
+	now := time.Now()
+	unix = now.Unix()
+	nanoRemainder = now.UnixNano() - (unix * 1000000000)
+	return unix, nanoRemainder
 }
 
 // NewNode creates a new Node object but does not initialize or start it
@@ -223,7 +189,7 @@ func (n *Node) ProxyFetch(keys []string) ([]*Item, error) {
 }
 
 // ProxyStore determines cluster leader and performs a remote store
-func (n *Node) ProxyStore(item *Item) error {
+func (n *Node) ProxyStore(item *Item, policy StorePolicy) error {
 	//leader := n.store.Leader()
 	return nil
 }
@@ -275,12 +241,15 @@ func getValue(val interface{}) ([]byte, error) {
 }
 
 // FetchItems retrieves items from the datastore
-func (n *Node) FetchItems(keys []string, fast bool) ([]*Item, error) {
-	var clvl rqlite.ConsistencyLevel
-	if fast {
-		clvl = rqlite.None
-	} else {
-		clvl = rqlite.Strong
+func (n *Node) FetchItems(keys []string, clvl ConsistencyLevel) ([]*Item, error) {
+	var rcl rqlite.ConsistencyLevel
+	switch clvl {
+	case Strong:
+		rcl = rqlite.Strong
+	case None:
+		rcl = rqlite.None
+	default:
+		return []*Item{}, newInternalErrorError(fmt.Errorf("unknown ConsistencyLevel: %v", clvl))
 	}
 	q := `SELECT key, value, size_bytes, flags, exptime FROM key_value_map WHERE`
 	where := []string{}
@@ -289,7 +258,7 @@ func (n *Node) FetchItems(keys []string, fast bool) ([]*Item, error) {
 	}
 	where = where[0 : len(where)-1] //drop last "OR"
 	q = fmt.Sprintf("%v %v;", q, strings.Join(where, " "))
-	rows, err := n.store.Query([]string{q}, false, false, clvl)
+	rows, err := n.store.Query([]string{q}, false, false, rcl)
 	if err != nil {
 		if err == rqlite.ErrNotLeader {
 			items, err2 := n.ProxyFetch(keys)
@@ -314,7 +283,7 @@ func (n *Node) FetchItems(keys []string, fast bool) ([]*Item, error) {
 			return []*Item{}, newInternalErrorError(fmt.Errorf("expires: %v", err))
 		}
 		expires := time.Unix(exp, 0)
-		if time.Now().After(expires) {
+		if exp != 0 && time.Now().After(expires) {
 			log.Printf("expiring value: %v", key)
 			go n.ExpireValue(key)
 			continue
@@ -346,32 +315,96 @@ func (n *Node) FetchItems(keys []string, fast bool) ([]*Item, error) {
 	return items, nil
 }
 
-//StoreItem stores an item in the datastore
-func (n *Node) StoreItem(item *Item) error {
-	q := `INSERT INTO key_value_map (key, value, size_bytes, flags, exptime, created, created_nano, last_used, last_used_nano)
+// set - store item unconditionally (insert or update if exists)
+// add - store item only if not exists (insert if not exists)
+// replace - store item only if exists (update if exists)
+
+//StoreItem stores an item in the datastore.
+// replace: overwrite item if it already exists, otherwise return error
+// implementing KeyExists
+func (n *Node) StoreItem(item *Item, policy StorePolicy) error {
+	switch policy {
+	case InsertOrUpdate:
+		return n.storeInsertOrUpdate(item)
+	case InsertIfNotExists:
+		return n.storeInsertIfNotExists(item)
+	case UpdateIfExists:
+	default:
+		return newInternalErrorError(fmt.Errorf("unknown StorePolicy: %v", policy))
+	}
+	return nil
+}
+
+func (n *Node) storeInsertOrUpdate(item *Item) error {
+	q := `INSERT OR REPLACE INTO key_value_map (key, value, size_bytes, flags, exptime, last_used, last_used_nano, created, created_nano)
 	      VALUES (`
-	now := time.Now()
-	nu := now.Unix()
-	nn := remainderNano(nu, now.UnixNano())
+	unix, nano := nowTimestamp()
 	values := []string{
 		fmt.Sprintf("'%v'", item.Name),
 		fmt.Sprintf("X'%v'", hex.EncodeToString(item.Value)),
 		fmt.Sprintf("%v", item.Size),
 		fmt.Sprintf("%v", item.Flags),
 		fmt.Sprintf("%v", item.Expiration.Unix()),
-		fmt.Sprintf("%v", nu),
-		fmt.Sprintf("%v", nn),
-		fmt.Sprintf("%v", nu),
-		fmt.Sprintf("%v", nn),
+		fmt.Sprintf("%v", unix),
+		fmt.Sprintf("%v", nano),
+		fmt.Sprintf("COALESCE((SELECT created FROM key_value_map WHERE key = '%v'), %v)", item.Name, unix),
+		fmt.Sprintf("COALESCE((SELECT created_nano FROM key_value_map WHERE key = '%v'), %v)", item.Name, nano),
 	}
 	q = fmt.Sprintf("%v%v);", q, strings.Join(values, ", "))
-	log.Printf("store query: %v", q)
 	ldr, err := n.execute(q, false)
 	if err != nil {
 		return fmt.Errorf("error running node execute: %v", err)
 	}
 	if !ldr {
-		return n.ProxyStore(item)
+		return n.ProxyStore(item, InsertOrUpdate)
+	}
+	return nil
+}
+
+func (n *Node) storeInsertIfNotExists(item *Item) error {
+	q := `INSERT OR IGNORE INTO key_value_map (key, value, size_bytes, flags, exptime, created, created_nano, last_used, last_used_nano)
+	      VALUES (`
+	unix, nano := nowTimestamp()
+	values := []string{
+		fmt.Sprintf("'%v'", item.Name),
+		fmt.Sprintf("X'%v'", hex.EncodeToString(item.Value)),
+		fmt.Sprintf("%v", item.Size),
+		fmt.Sprintf("%v", item.Flags),
+		fmt.Sprintf("%v", item.Expiration.Unix()),
+		fmt.Sprintf("%v", unix),
+		fmt.Sprintf("%v", nano),
+		fmt.Sprintf("%v", unix),
+		fmt.Sprintf("%v", nano),
+	}
+	q = fmt.Sprintf("%v%v);", q, strings.Join(values, ", "))
+	ldr, err := n.execute(q, false)
+	if err != nil {
+		return fmt.Errorf("error running node execute: %v", err)
+	}
+	if !ldr {
+		return n.ProxyStore(item, InsertIfNotExists)
+	}
+	return nil
+}
+
+func (n *Node) storeUpdateIfExists(item *Item) error {
+	q := `UPDATE OR IGNORE key_value_map SET %v WHERE key = '%v';`
+	unix, nano := nowTimestamp()
+	columns := []string{
+		fmt.Sprintf("value = X'%v'", hex.EncodeToString(item.Value)),
+		fmt.Sprintf("size_bytes = %v", item.Size),
+		fmt.Sprintf("flags = %v", item.Flags),
+		fmt.Sprintf("exptime = %v", item.Expiration.Unix()),
+		fmt.Sprintf("last_used = %v", unix),
+		fmt.Sprintf("last_used_nano = %v", nano),
+	}
+	q = fmt.Sprintf(q, strings.Join(columns, ", "), item.Name)
+	ldr, err := n.execute(q, false)
+	if err != nil {
+		return fmt.Errorf("error running node execute: %v", err)
+	}
+	if !ldr {
+		return n.ProxyStore(item, UpdateIfExists)
 	}
 	return nil
 }
