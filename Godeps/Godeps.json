@@ -38,24 +38,19 @@
 			"Rev": "467f50b0c026317ad28fc2c0a08aab6f755cfc7a"
 		},
 		{
-			"ImportPath": "github.com/otoolep/rqlite/db",
-			"Comment": "v2.2.2-26-g60103f1",
-			"Rev": "60103f1d24965f04b4290eeff38faca0786681e3"
+			"ImportPath": "github.com/rqlite/rqlite/db",
+			"Comment": "v3.1.0-39-g50ff716",
+			"Rev": "50ff716c027ea12257b7848401fa1d945f0741c4"
 		},
 		{
-			"ImportPath": "github.com/otoolep/rqlite/http",
-			"Comment": "v2.2.2-26-g60103f1",
-			"Rev": "60103f1d24965f04b4290eeff38faca0786681e3"
+			"ImportPath": "github.com/rqlite/rqlite/http",
+			"Comment": "v3.1.0-39-g50ff716",
+			"Rev": "50ff716c027ea12257b7848401fa1d945f0741c4"
 		},
 		{
-			"ImportPath": "github.com/otoolep/rqlite/store",
-			"Comment": "v2.2.2-26-g60103f1",
-			"Rev": "60103f1d24965f04b4290eeff38faca0786681e3"
-		},
-		{
-			"ImportPath": "github.com/otoolep/rqlite/tcp",
-			"Comment": "v2.2.2-26-g60103f1",
-			"Rev": "60103f1d24965f04b4290eeff38faca0786681e3"
+			"ImportPath": "github.com/rqlite/rqlite/store",
+			"Comment": "v3.1.0-39-g50ff716",
+			"Rev": "50ff716c027ea12257b7848401fa1d945f0741c4"
 		},
 		{
 			"ImportPath": "github.com/spf13/cobra",

@@ -20,12 +20,11 @@ import (
 
 	"github.com/hashicorp/raft"
 	"github.com/hashicorp/raft-boltdb"
-	sql "github.com/otoolep/rqlite/db"
-	mux "github.com/otoolep/rqlite/tcp"
+	sql "github.com/rqlite/rqlite/db"
 )
 
 var (
-	// ErrFieldsRequired is returned when a node attempts to execute a leader-only
+	// ErrNotLeader is returned when a node attempts to execute a leader-only
 	// operation.
 	ErrNotLeader = errors.New("not leader")
 )
@@ -38,10 +37,13 @@ const (
 	appliedWaitDelay    = 100 * time.Millisecond
 )
 
-const (
-	muxRaftHeader = 1 // Raft consensus communications
-	muxMetaHeader = 2 // Cluster meta communications
-)
+// Transport is the interface the network service must provide.
+type Transport interface {
+	net.Listener
+
+	// Dial is used to create a new outgoing connection
+	Dial(address string, timeout time.Duration) (net.Conn, error)
+}
 
 // commandType are commands that affect the state of the cluster, and must go through Raft.
 type commandType int
@@ -82,6 +84,7 @@ type peersSub map[string]string
 // ConsistencyLevel represents the available read consistency levels.
 type ConsistencyLevel int
 
+// Represents the available consistency levels.
 const (
 	None ConsistencyLevel = iota
 	Weak
@@ -93,11 +96,30 @@ type clusterMeta struct {
 	APIPeers map[string]string // Map from Raft address to API address
 }
 
-// newClusterMeta returns an initialized cluster meta store.
+// NewClusterMeta returns an initialized cluster meta store.
 func newClusterMeta() *clusterMeta {
 	return &clusterMeta{
 		APIPeers: make(map[string]string),
 	}
+}
+
+func (c *clusterMeta) AddrForPeer(addr string) string {
+	if api, ok := c.APIPeers[addr]; ok && api != "" {
+		return api
+	}
+
+	// Go through each entry, and see if any key resolves to addr.
+	for k, v := range c.APIPeers {
+		resv, err := net.ResolveTCPAddr("tcp", k)
+		if err != nil {
+			continue
+		}
+		if resv.String() == addr {
+			return v
+		}
+	}
+
+	return ""
 }
 
 // DBConfig represents the configuration of the underlying SQLite database.
@@ -113,17 +135,17 @@ func NewDBConfig(dsn string, memory bool) *DBConfig {
 
 // Store is a SQLite database, where all changes are made via Raft consensus.
 type Store struct {
-	raftDir  string
-	raftBind string
-	mux      *mux.Mux
+	raftDir string
 
 	mu sync.RWMutex // Sync access between queries and snapshots.
 
-	ln     *networkLayer // Raft network between nodes.
-	raft   *raft.Raft    // The consensus mechanism.
-	dbConf *DBConfig     // SQLite database config.
-	dbPath string        // Path to underlying SQLite file, if not in-memory.
-	db     *sql.DB       // The underlying SQLite store.
+	raft          *raft.Raft // The consensus mechanism.
+	raftTransport Transport
+	peerStore     raft.PeerStore
+	dbConf        *DBConfig // SQLite database config.
+	dbPath        string    // Path to underlying SQLite file, if not in-memory.
+	db            *sql.DB   // The underlying SQLite store.
+	joinRequired  bool      // Whether an explicit join is required.
 
 	metaMu sync.RWMutex
 	meta   *clusterMeta
@@ -132,15 +154,14 @@ type Store struct {
 }
 
 // New returns a new Store.
-func New(dbConf *DBConfig, dir, bind string) *Store {
+func New(dbConf *DBConfig, dir string, tn Transport) *Store {
 	return &Store{
-		raftDir:  dir,
-		raftBind: bind,
-		mux:      mux.NewMux(),
-		dbConf:   dbConf,
-		dbPath:   filepath.Join(dir, sqliteFile),
-		meta:     newClusterMeta(),
-		logger:   log.New(os.Stderr, "[store] ", log.LstdFlags),
+		raftDir:       dir,
+		raftTransport: tn,
+		dbConf:        dbConf,
+		dbPath:        filepath.Join(dir, sqliteFile),
+		meta:          newClusterMeta(),
+		logger:        log.New(os.Stderr, "[store] ", log.LstdFlags),
 	}
 }
 
@@ -181,6 +202,7 @@ func (s *Store) Open(enableSingle bool) error {
 	if err != nil {
 		return err
 	}
+	s.joinRequired = len(peers) <= 1
 
 	// Allow the node to entry single-mode, potentially electing itself, if
 	// explicitly enabled and there is only 1 node in the cluster already.
@@ -190,19 +212,11 @@ func (s *Store) Open(enableSingle bool) error {
 		config.DisableBootstrapAfterElect = false
 	}
 
-	// Set up TCP communication between nodes.
-	ln, err := net.Listen("tcp", s.raftBind)
-	if err != nil {
-		return err
-	}
-	go s.mux.Serve(ln)
-
 	// Setup Raft communication.
-	s.ln = newNetworkLayer(s.mux.Listen(muxRaftHeader), ln.Addr())
-	transport := raft.NewNetworkTransport(s.ln, 3, 10*time.Second, os.Stderr)
+	transport := raft.NewNetworkTransport(s.raftTransport, 3, 10*time.Second, os.Stderr)
 
 	// Create peer storage.
-	peerStore := raft.NewJSONPeers(s.raftDir, transport)
+	s.peerStore = raft.NewJSONPeers(s.raftDir, transport)
 
 	// Create the snapshot store. This allows Raft to truncate the log.
 	snapshots, err := raft.NewFileSnapshotStore(s.raftDir, retainSnapshotCount, os.Stderr)
@@ -217,7 +231,7 @@ func (s *Store) Open(enableSingle bool) error {
 	}
 
 	// Instantiate the Raft system.
-	ra, err := raft.NewRaft(config, s, logStore, logStore, snapshots, peerStore, transport)
+	ra, err := raft.NewRaft(config, s, logStore, logStore, snapshots, s.peerStore, transport)
 	if err != nil {
 		return fmt.Errorf("new raft: %s", err)
 	}
@@ -240,19 +254,31 @@ func (s *Store) Close(wait bool) error {
 	return nil
 }
 
+// JoinRequired returns whether the node needs to join a cluster after being opened.
+func (s *Store) JoinRequired() bool {
+	return s.joinRequired
+}
+
 // Path returns the path to the store's storage directory.
 func (s *Store) Path() string {
 	return s.raftDir
 }
 
+// Addr returns the address of the store.
 func (s *Store) Addr() net.Addr {
-	return s.ln.Addr()
+	return s.raftTransport.Addr()
 }
 
 // Leader returns the current leader. Returns a blank string if there is
 // no leader.
 func (s *Store) Leader() string {
 	return s.raft.Leader()
+}
+
+// Peer returns the API address for the given addr. If there is no peer
+// for the address, it returns the empty string.
+func (s *Store) Peer(addr string) string {
+	return s.meta.AddrForPeer(addr)
 }
 
 // APIPeers return the map of Raft addresses to API addresses.
@@ -265,6 +291,11 @@ func (s *Store) APIPeers() (map[string]string, error) {
 		peers[k] = v
 	}
 	return peers, nil
+}
+
+// Nodes returns the list of current peers.
+func (s *Store) Nodes() ([]string, error) {
+	return s.peerStore.Peers()
 }
 
 // WaitForLeader blocks until a leader is detected, or the timeout expires.
@@ -324,10 +355,19 @@ func (s *Store) Stats() (map[string]interface{}, error) {
 		dbStatus["path"] = ":memory:"
 	}
 
+	s.metaMu.RLock()
+	defer s.metaMu.RUnlock()
+	peers, err := s.peerStore.Peers()
+	if err != nil {
+		return nil, err
+	}
 	status := map[string]interface{}{
 		"raft":    s.raft.Stats(),
 		"addr":    s.Addr().String(),
 		"leader":  s.Leader(),
+		"meta":    s.meta,
+		"peers":   peers,
+		"dir":     s.raftDir,
 		"sqlite3": dbStatus,
 	}
 	return status, nil
@@ -355,6 +395,9 @@ func (s *Store) Execute(queries []string, timings, tx bool) ([]*sql.Result, erro
 
 	f := s.raft.Apply(b, raftTimeout)
 	if e := f.(raft.Future); e.Error() != nil {
+		if e.Error() == raft.ErrNotLeader {
+			return nil, ErrNotLeader
+		}
 		return nil, e.Error()
 	}
 
@@ -409,6 +452,9 @@ func (s *Store) Query(queries []string, timings, tx bool, lvl ConsistencyLevel) 
 
 		f := s.raft.Apply(b, raftTimeout)
 		if e := f.(raft.Future); e.Error() != nil {
+			if e.Error() == raft.ErrNotLeader {
+				return nil, ErrNotLeader
+			}
 			return nil, e.Error()
 		}
 
@@ -452,6 +498,18 @@ func (s *Store) Join(addr string) error {
 		return f.Error()
 	}
 	s.logger.Printf("node at %s joined successfully", addr)
+	return nil
+}
+
+// Remove removes a node from the store, specifed by addr.
+func (s *Store) Remove(addr string) error {
+	s.logger.Printf("received request to remove node %s", addr)
+
+	f := s.raft.RemovePeer(addr)
+	if f.Error() != nil {
+		return f.Error()
+	}
+	s.logger.Printf("node %s removed successfully", addr)
 	return nil
 }
 

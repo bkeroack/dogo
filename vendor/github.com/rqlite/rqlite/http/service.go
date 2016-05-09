@@ -3,6 +3,7 @@
 package http
 
 import (
+	"bytes"
 	"crypto/tls"
 	"encoding/json"
 	"expvar"
@@ -12,11 +13,12 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"runtime"
 	"strings"
 	"time"
 
-	sql "github.com/otoolep/rqlite/db"
-	"github.com/otoolep/rqlite/store"
+	sql "github.com/rqlite/rqlite/db"
+	"github.com/rqlite/rqlite/store"
 )
 
 // Store is the interface the Raft-driven database must implement.
@@ -36,8 +38,14 @@ type Store interface {
 	// Join joins the node, reachable at addr, to this node.
 	Join(addr string) error
 
-	// Leader returns the leader of the cluster.
+	// Remove removes the node specified by addr from the cluster.
+	Remove(addr string) error
+
+	// Leader returns the Raft leader of the cluster.
 	Leader() string
+
+	// Peer returns the API peer for the given address
+	Peer(addr string) string
 
 	// Stats returns stats on the Store.
 	Stats() (map[string]interface{}, error)
@@ -73,12 +81,13 @@ const (
 	numQueries    = "queries"
 	numBackups    = "backups"
 
-	PermAll     = "all"
-	PermJoin    = "join"
-	PermExecute = "execute"
-	PermQuery   = "query"
-	PermStatus  = "status"
-	PermBackup  = "backup"
+	PermAll     = "all"     // PermAll means all actions permitted.
+	PermJoin    = "join"    // PermJoin means user is permitted to join cluster.
+	PermRemove  = "remove"  // PermRemove means user is permitted to remove a node.
+	PermExecute = "execute" // PermJoin means user can access execute endpoint.
+	PermQuery   = "query"   // PermQuery means user can access query endpoint.
+	PermStatus  = "status"  // PermStatus means user can retrieve node status.
+	PermBackup  = "backup"  // PermBackup means user can backup node.
 )
 
 func init() {
@@ -114,10 +123,11 @@ type Service struct {
 	CertFile string // Path to SSL certificate.
 	KeyFile  string // Path to SSL private key.
 
+	NoVerifySelect bool // Don't check query statements for leading SELECT
+
 	credentialStore CredentialStore
 
-	Expvar          bool
-	DisableRedirect bool // Disable leader-redirection.
+	Expvar bool
 
 	BuildInfo map[string]interface{}
 
@@ -201,6 +211,8 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleBackup(w, r)
 	case strings.HasPrefix(r.URL.Path, "/join"):
 		s.handleJoin(w, r)
+	case strings.HasPrefix(r.URL.Path, "/remove"):
+		s.handleRemove(w, r)
 	case strings.HasPrefix(r.URL.Path, "/status"):
 		s.handleStatus(w, r)
 	case r.URL.Path == "/debug/vars" && s.Expvar:
@@ -240,6 +252,43 @@ func (s *Service) handleJoin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.store.Join(remoteAddr); err != nil {
+		b := bytes.NewBufferString(err.Error())
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write(b.Bytes())
+		return
+	}
+}
+
+// handleRemove handles cluster-remove requests.
+func (s *Service) handleRemove(w http.ResponseWriter, r *http.Request) {
+	if !s.CheckRequestPerm(r, PermRemove) {
+		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
+
+	b, err := ioutil.ReadAll(r.Body)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	m := map[string]string{}
+	if err := json.Unmarshal(b, &m); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	if len(m) != 1 {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	remoteAddr, ok := m["addr"]
+	if !ok {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	if err := s.store.Remove(remoteAddr); err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
@@ -295,9 +344,19 @@ func (s *Service) handleStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	rt := map[string]interface{}{
+		"GOARCH":       runtime.GOARCH,
+		"GOOS":         runtime.GOOS,
+		"GOMAXPROCS":   runtime.GOMAXPROCS(0),
+		"numCPU":       runtime.NumCPU(),
+		"numGoroutine": runtime.NumGoroutine(),
+		"version":      runtime.Version(),
+	}
+
 	httpStatus := map[string]interface{}{
-		"addr": s.Addr().String(),
-		"auth": prettyEnabled(s.credentialStore != nil),
+		"addr":     s.Addr().String(),
+		"auth":     prettyEnabled(s.credentialStore != nil),
+		"redirect": s.store.Peer(s.store.Leader()),
 	}
 
 	nodeStatus := map[string]interface{}{
@@ -307,9 +366,10 @@ func (s *Service) handleStatus(w http.ResponseWriter, r *http.Request) {
 
 	// Build the status response.
 	status := map[string]interface{}{
-		"store": results,
-		"http":  httpStatus,
-		"node":  nodeStatus,
+		"runtime": rt,
+		"store":   results,
+		"http":    httpStatus,
+		"node":    nodeStatus,
 	}
 	if !s.lastBackup.IsZero() {
 		status["last_backup"] = s.lastBackup
@@ -376,8 +436,15 @@ func (s *Service) handleExecute(w http.ResponseWriter, r *http.Request) {
 
 	results, err := s.store.Execute(queries, timings, isTx)
 	if err != nil {
-		if err == store.ErrNotLeader && !s.DisableRedirect {
-			http.Redirect(w, r, s.store.Leader(), http.StatusTemporaryRedirect)
+		if err == store.ErrNotLeader {
+			leader := s.store.Peer(s.store.Leader())
+			if leader == "" {
+				http.Error(w, err.Error(), http.StatusServiceUnavailable)
+				return
+			}
+
+			redirect := s.FormRedirect(r, leader)
+			http.Redirect(w, r, redirect, http.StatusMovedPermanently)
 			return
 		}
 		resp.Error = err.Error()
@@ -425,7 +492,7 @@ func (s *Service) handleQuery(w http.ResponseWriter, r *http.Request) {
 
 	if r.Method == "GET" {
 		query, err := stmtParam(r)
-		if err != nil {
+		if err != nil || query == "" {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
@@ -441,12 +508,34 @@ func (s *Service) handleQuery(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
+		if len(queries) == 0 {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+	}
+
+	// Validate queries, unless disabled.
+	if !s.NoVerifySelect {
+		for _, q := range queries {
+			u := strings.ToUpper(strings.TrimSpace(q))
+			if !strings.HasPrefix(u, "SELECT ") {
+				w.WriteHeader(http.StatusForbidden)
+				return
+			}
+		}
 	}
 
 	results, err := s.store.Query(queries, timings, isTx, lvl)
 	if err != nil {
-		if err == store.ErrNotLeader && !s.DisableRedirect {
-			http.Redirect(w, r, s.store.Leader(), http.StatusTemporaryRedirect)
+		if err == store.ErrNotLeader {
+			leader := s.store.Peer(s.store.Leader())
+			if leader == "" {
+				http.Error(w, err.Error(), http.StatusServiceUnavailable)
+				return
+			}
+
+			redirect := s.FormRedirect(r, leader)
+			http.Redirect(w, r, redirect, http.StatusMovedPermanently)
 			return
 		}
 		resp.Error = err.Error()
@@ -460,6 +549,15 @@ func (s *Service) handleQuery(w http.ResponseWriter, r *http.Request) {
 // Addr returns the address on which the Service is listening
 func (s *Service) Addr() net.Addr {
 	return s.ln.Addr()
+}
+
+// FormRedirect returns the value for the "Location" header for a 301 response.
+func (s *Service) FormRedirect(r *http.Request, host string) string {
+	protocol := "http"
+	if s.credentialStore != nil {
+		protocol = "https"
+	}
+	return fmt.Sprintf("%s://%s%s", protocol, host, r.URL.Path)
 }
 
 // CheckRequestPerm returns true if authentication is enabled and the user contained

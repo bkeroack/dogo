@@ -14,8 +14,8 @@ import (
 	"time"
 
 	"github.com/dollarshaveclub/go-lib/set"
-	httpd "github.com/otoolep/rqlite/http"
-	rqlite "github.com/otoolep/rqlite/store"
+	httpd "github.com/rqlite/rqlite/http"
+	rqlite "github.com/rqlite/rqlite/store"
 )
 
 // StorePolicy represents desired behavior of a store operation
