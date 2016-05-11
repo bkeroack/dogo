@@ -17,6 +17,10 @@
 			"Rev": "ca461381870590a71f824fb2dade2367c3d27393"
 		},
 		{
+			"ImportPath": "github.com/golang/protobuf/proto",
+			"Rev": "7cc19b78d562895b13596ddce7aafb59dd789318"
+		},
+		{
 			"ImportPath": "github.com/hashicorp/go-msgpack/codec",
 			"Rev": "fa3f63826f7c23912c15263591e65d54d080b458"
 		},
@@ -61,8 +65,64 @@
 			"Rev": "8f6a28b0916586e7f22fe931ae2fcfc380b1c0e6"
 		},
 		{
+			"ImportPath": "golang.org/x/net/context",
+			"Rev": "96dbb961a39ddccf16860cdd355bfa639c497f23"
+		},
+		{
+			"ImportPath": "golang.org/x/net/http2",
+			"Rev": "96dbb961a39ddccf16860cdd355bfa639c497f23"
+		},
+		{
+			"ImportPath": "golang.org/x/net/http2/hpack",
+			"Rev": "96dbb961a39ddccf16860cdd355bfa639c497f23"
+		},
+		{
+			"ImportPath": "golang.org/x/net/internal/timeseries",
+			"Rev": "96dbb961a39ddccf16860cdd355bfa639c497f23"
+		},
+		{
+			"ImportPath": "golang.org/x/net/trace",
+			"Rev": "96dbb961a39ddccf16860cdd355bfa639c497f23"
+		},
+		{
 			"ImportPath": "golang.org/x/sys/unix",
 			"Rev": "b776ec39b3e54652e09028aaaaac9757f4f8211a"
+		},
+		{
+			"ImportPath": "google.golang.org/grpc",
+			"Rev": "ab0be5212fb225475f2087566eded7da5d727960"
+		},
+		{
+			"ImportPath": "google.golang.org/grpc/codes",
+			"Rev": "ab0be5212fb225475f2087566eded7da5d727960"
+		},
+		{
+			"ImportPath": "google.golang.org/grpc/credentials",
+			"Rev": "ab0be5212fb225475f2087566eded7da5d727960"
+		},
+		{
+			"ImportPath": "google.golang.org/grpc/grpclog",
+			"Rev": "ab0be5212fb225475f2087566eded7da5d727960"
+		},
+		{
+			"ImportPath": "google.golang.org/grpc/internal",
+			"Rev": "ab0be5212fb225475f2087566eded7da5d727960"
+		},
+		{
+			"ImportPath": "google.golang.org/grpc/metadata",
+			"Rev": "ab0be5212fb225475f2087566eded7da5d727960"
+		},
+		{
+			"ImportPath": "google.golang.org/grpc/naming",
+			"Rev": "ab0be5212fb225475f2087566eded7da5d727960"
+		},
+		{
+			"ImportPath": "google.golang.org/grpc/peer",
+			"Rev": "ab0be5212fb225475f2087566eded7da5d727960"
+		},
+		{
+			"ImportPath": "google.golang.org/grpc/transport",
+			"Rev": "ab0be5212fb225475f2087566eded7da5d727960"
 		}
 	]
 }

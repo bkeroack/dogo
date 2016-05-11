@@ -76,6 +76,8 @@ type Item struct {
 	LastUsed   time.Time
 }
 
+type grpcServer struct{}
+
 var reqTables = map[string]string{
 	"key_value_map": `CREATE TABLE key_value_map (
 		                   key TEXT PRIMARY KEY,
