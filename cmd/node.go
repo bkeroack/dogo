@@ -16,6 +16,7 @@ import (
 	"github.com/dollarshaveclub/go-lib/set"
 	httpd "github.com/rqlite/rqlite/http"
 	rqlite "github.com/rqlite/rqlite/store"
+	tcp "github.com/rqlite/rqlite/tcp"
 )
 
 // StorePolicy represents desired behavior of a store operation
@@ -23,6 +24,13 @@ type StorePolicy int
 
 // ConsistencyLevel represents the desired consistency of an operation
 type ConsistencyLevel int
+
+// Magic byte at the start of intra-cluster TCP connection
+const (
+	muxRaftHeader = 1
+	muxMetaheader = 2
+	muxRPCHeader  = 3
+)
 
 // Store operation semantics
 const (
@@ -54,6 +62,7 @@ type NodeConfig struct {
 	Persistent    bool   //Use persistent (disk-based) storage for data items (Raft state is always persistent)
 	DataPath      string //Path for data files (if persistent) and Raft state
 	RaftAddr      string //TCP address and port to listen for Raft traffic
+	RaftAdvAddr   string //Address to advertise to the rest of the cluster
 	JoinAddr      string //Initial cluster member to join
 	Listener      *NodeListener
 	RaftVerifyTLS bool //Verify TLS certificates for Raft connections
@@ -115,12 +124,31 @@ func NewNode(config *NodeConfig) *Node {
 //listening for new connections. If block is false, the listener will be started
 //asynchronously.
 func (n *Node) RunNode(block bool) error {
+
+	// Set up TCP communication between nodes.
+	ln, err := net.Listen("tcp", n.config.RaftAddr)
+	if err != nil {
+		log.Fatalf("failed to listen on %v: %v", n.config.RaftAddr, err)
+	}
+	var adv net.Addr
+	if n.config.RaftAdvAddr != "" {
+		adv, err = net.ResolveTCPAddr("tcp", n.config.RaftAdvAddr)
+		if err != nil {
+			log.Fatalf("failed to resolve advertise address %v: %v", n.config.RaftAdvAddr, err)
+		}
+	}
+	mux := tcp.NewMux(ln, adv)
+	go mux.Serve()
+
+	// Start up mux and get transports for cluster.
+	trans := mux.Listen(muxRaftHeader)
+
 	dataPath, err := filepath.Abs(n.config.DataPath)
 	if err != nil {
 		return fmt.Errorf("failed to determine absolute data path: %s", err.Error())
 	}
 	dc := rqlite.NewDBConfig("cache=shared", !n.config.Persistent)
-	n.store = rqlite.New(dc, dataPath, n.config.RaftAddr)
+	n.store = rqlite.New(dc, dataPath, trans)
 	if err := n.store.Open(n.config.JoinAddr == ""); err != nil {
 		return fmt.Errorf("failed to open store: %v", err)
 	}
