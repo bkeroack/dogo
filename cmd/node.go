@@ -17,6 +17,7 @@ import (
 	httpd "github.com/rqlite/rqlite/http"
 	rqlite "github.com/rqlite/rqlite/store"
 	tcp "github.com/rqlite/rqlite/tcp"
+	"google.golang.org/grpc"
 )
 
 // StorePolicy represents desired behavior of a store operation
@@ -70,8 +71,9 @@ type NodeConfig struct {
 
 // Node represents a running cluster node
 type Node struct {
-	config *NodeConfig
-	store  *rqlite.Store
+	config   *NodeConfig
+	store    *rqlite.Store
+	rpcLayer *tcp.Layer //RPC mux listener
 }
 
 //Item represents a datastore Item
@@ -84,8 +86,6 @@ type Item struct {
 	Created    time.Time
 	LastUsed   time.Time
 }
-
-type grpcServer struct{}
 
 var reqTables = map[string]string{
 	"key_value_map": `CREATE TABLE key_value_map (
@@ -117,6 +117,16 @@ func NewNode(config *NodeConfig) *Node {
 	return &n
 }
 
+func (n *Node) listenRPC() {
+	log.Printf("listening for RPC connections")
+	s := grpc.NewServer()
+	rpc := grpcServer{
+		n: n,
+	}
+	RegisterDogoRPCExecuterServer(s, &rpc)
+	s.Serve(n.rpcLayer)
+}
+
 //RunNode creates and starts a new cluster node according to NodeConfig
 //It will initially block on finding or becoming the cluster leader. A non-nil
 //return value indicates that the cluster is up and ready to accept operations.
@@ -141,14 +151,15 @@ func (n *Node) RunNode(block bool) error {
 	go mux.Serve()
 
 	// Start up mux and get transports for cluster.
-	trans := mux.Listen(muxRaftHeader)
+	ctrans := mux.Listen(muxRaftHeader)
+	n.rpcLayer = mux.Listen(muxRPCHeader)
 
 	dataPath, err := filepath.Abs(n.config.DataPath)
 	if err != nil {
 		return fmt.Errorf("failed to determine absolute data path: %s", err.Error())
 	}
 	dc := rqlite.NewDBConfig("cache=shared", !n.config.Persistent)
-	n.store = rqlite.New(dc, dataPath, trans)
+	n.store = rqlite.New(dc, dataPath, ctrans)
 	if err := n.store.Open(n.config.JoinAddr == ""); err != nil {
 		return fmt.Errorf("failed to open store: %v", err)
 	}
@@ -169,6 +180,8 @@ func (n *Node) RunNode(block bool) error {
 	if err := n.checkTables(); err != nil {
 		log.Fatalf("error checking tables: %v", err)
 	}
+
+	go n.listenRPC()
 
 	listen := func() error {
 		l, err := net.Listen(n.config.Listener.Type, n.config.Listener.Addr)
