@@ -10,14 +10,13 @@ service DogoRPCExecuter {
 message RPCItem {
   string name = 1;
   int64 flags = 2;
-  uint64 expiration = 3;
+  int64 expiration = 3;
   bytes value = 4;
 }
 
 message FetchItemsResponse {
-  bool error = 1;
-  string errormsg = 2;
-  repeated RPCItem items = 3;
+  RPCError rpc_error = 1;
+  repeated RPCItem items = 2;
 }
 
 message FetchItemsRequest {
@@ -26,12 +25,11 @@ message FetchItemsRequest {
     STRONG = 1;
   }
   ConsistencyLevel consistency_level = 1;
-  repeated RPCItem items = 2;
+  repeated string names = 2;
 }
 
 message StoreItemResponse {
-  bool error = 1;
-  string errormsg = 2;
+  RPCError rpc_error = 1;
 }
 
 message StoreItemRequest {
@@ -42,4 +40,17 @@ message StoreItemRequest {
   }
   StorePolicy store_policy = 1;
   RPCItem item = 2;
+}
+
+message RPCError {
+  enum ErrorType {
+    NO_ERROR = 0;
+    INTERNAL_ERROR = 1;
+    NOT_LEADER = 2;
+    BAD_REQUEST = 3;
+    UNKNOWN = 4;
+  }
+  bool is_error = 1;
+  ErrorType error_type = 2;
+  string error_message = 3;
 }

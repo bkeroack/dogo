@@ -33,6 +33,8 @@ const (
 	muxRPCHeader  = 3
 )
 
+const rpcTimeoutSeconds = 30
+
 // Store operation semantics
 const (
 	InsertOrUpdate    StorePolicy = iota // Insert if not exists or update existing item
@@ -69,11 +71,18 @@ type NodeConfig struct {
 	RaftVerifyTLS bool //Verify TLS certificates for Raft connections
 }
 
+// Defines the RPC connection context between this node and a particular remote node
+type rpcContext struct {
+	conn   *grpc.ClientConn
+	client *DogoRPCExecuterClient
+}
+
 // Node represents a running cluster node
 type Node struct {
-	config   *NodeConfig
-	store    *rqlite.Store
-	rpcLayer *tcp.Layer //RPC mux listener
+	config    *NodeConfig
+	store     *rqlite.Store
+	rpcLayer  *tcp.Layer             //RPC mux listener
+	rpcCtxMap map[string]*rpcContext // [node] -> RPC Execution context
 }
 
 //Item represents a datastore Item
@@ -225,9 +234,45 @@ func (n *Node) execute(q string, txn bool) (leader bool, exerr error) {
 	return true, nil
 }
 
+func (n *Node) getRPCClient(leader string) (*DogoRPCExecuterClient, error) {
+	var c *DogoRPCExecuterClient
+	if val, ok := n.rpcCtxMap[leader]; ok {
+		s, err := val.conn.State()
+		if err != nil {
+			return c, err
+		}
+		if s == grpc.Ready || s == grpc.Idle {
+			c = n.rpcCtxMap[leader].client
+		}
+	}
+	if c == nil {
+		conn, err := grpc.Dial(leader, grpc.WithTimeout(rpcTimeoutSeconds*time.Second), grpc.WithBlock(), grpc.WithInsecure())
+		if err != nil {
+			return c, err
+		}
+		client := NewDogoRPCExecuterClient(conn)
+		rpcctx := rpcContext{
+			conn:   conn,
+			client: &client,
+		}
+		n.rpcCtxMap[leader] = &rpcctx
+		c = &client
+	}
+	return c, nil
+}
+
 // ProxyFetch determines cluster leader and performs a remote fetch from it
 func (n *Node) ProxyFetch(keys []string) ([]*Item, error) {
-	//leader := n.store.Leader()
+	items := []*Item{}
+	if n.store.IsLeader() {
+		return items, newInternalErrorError(fmt.Errorf("ProxyFetch called but we are the leader"))
+	}
+	leader := n.store.Leader()
+	_, err := n.getRPCClient(leader)
+	if err != nil {
+		return items, newInternalErrorError(fmt.Errorf("ProxyFetch: error getting RPC connection: %v", err))
+	}
+	//c.FetchItems(ctx, in, opts)
 	return []*Item{}, nil
 }
 
