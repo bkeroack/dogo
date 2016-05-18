@@ -9,8 +9,8 @@
 		},
 		{
 			"ImportPath": "github.com/boltdb/bolt",
-			"Comment": "v1.2.0-21-gd974993",
-			"Rev": "d97499360d1ecebc492ea66c7447ea948f417620"
+			"Comment": "v1.2.1",
+			"Rev": "dfb21201d9270c1082d5fb0f07f500311ff72f18"
 		},
 		{
 			"ImportPath": "github.com/dollarshaveclub/go-lib/set",
@@ -26,7 +26,7 @@
 		},
 		{
 			"ImportPath": "github.com/hashicorp/raft",
-			"Rev": "1c84b7ca86424d341b95457cf6da85fdb367c4f0"
+			"Rev": "5fdd8ee3c3b2cc508e29991c4caf117977034eb1"
 		},
 		{
 			"ImportPath": "github.com/hashicorp/raft-boltdb",
@@ -38,28 +38,28 @@
 		},
 		{
 			"ImportPath": "github.com/mattn/go-sqlite3",
-			"Comment": "v1.1.0-62-g467f50b",
-			"Rev": "467f50b0c026317ad28fc2c0a08aab6f755cfc7a"
+			"Comment": "v1.1.0-69-g38ee283",
+			"Rev": "38ee283dabf11c9cbdb968eebd79b1fa7acbabe6"
 		},
 		{
 			"ImportPath": "github.com/rqlite/rqlite/db",
-			"Comment": "v3.1.0-39-g50ff716",
-			"Rev": "50ff716c027ea12257b7848401fa1d945f0741c4"
+			"Comment": "v3.1.0-49-g826dfd3",
+			"Rev": "826dfd37af9b308259a1fc2daa925ba67974df14"
 		},
 		{
 			"ImportPath": "github.com/rqlite/rqlite/http",
-			"Comment": "v3.1.0-39-g50ff716",
-			"Rev": "50ff716c027ea12257b7848401fa1d945f0741c4"
+			"Comment": "v3.1.0-49-g826dfd3",
+			"Rev": "826dfd37af9b308259a1fc2daa925ba67974df14"
 		},
 		{
 			"ImportPath": "github.com/rqlite/rqlite/store",
-			"Comment": "v3.1.0-39-g50ff716",
-			"Rev": "50ff716c027ea12257b7848401fa1d945f0741c4"
+			"Comment": "v3.1.0-49-g826dfd3",
+			"Rev": "826dfd37af9b308259a1fc2daa925ba67974df14"
 		},
 		{
 			"ImportPath": "github.com/rqlite/rqlite/tcp",
-			"Comment": "v3.1.0-39-g50ff716",
-			"Rev": "50ff716c027ea12257b7848401fa1d945f0741c4"
+			"Comment": "v3.1.0-49-g826dfd3",
+			"Rev": "826dfd37af9b308259a1fc2daa925ba67974df14"
 		},
 		{
 			"ImportPath": "github.com/spf13/cobra",
