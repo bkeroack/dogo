@@ -12,6 +12,10 @@ message RPCItem {
   int64 flags = 2;
   int64 expiration = 3;
   bytes value = 4;
+  int64 created = 5;
+  int64 created_nano = 6;
+  int64 last_used = 7;
+  int64 last_used_nano = 8;
 }
 
 message FetchItemsResponse {

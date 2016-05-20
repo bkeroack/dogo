@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/dollarshaveclub/go-lib/set"
@@ -74,15 +75,20 @@ type NodeConfig struct {
 // Defines the RPC connection context between this node and a particular remote node
 type rpcContext struct {
 	conn   *grpc.ClientConn
-	client *DogoRPCExecuterClient
+	client DogoRPCExecuterClient
+}
+
+type rpcContextMap struct {
+	sync.RWMutex
+	ctxmap map[string]*rpcContext // [node] -> RPC Execution context
 }
 
 // Node represents a running cluster node
 type Node struct {
-	config    *NodeConfig
-	store     *rqlite.Store
-	rpcLayer  *tcp.Layer             //RPC mux listener
-	rpcCtxMap map[string]*rpcContext // [node] -> RPC Execution context
+	config   *NodeConfig
+	store    *rqlite.Store
+	rpcLayer *tcp.Layer //RPC mux listener
+	rpcCtx   rpcContextMap
 }
 
 //Item represents a datastore Item
@@ -112,10 +118,13 @@ var reqTables = map[string]string{
 
 // nowTimestamp returns unix timestamp and nanosecond remainder for the current time
 func nowTimestamp() (unix int64, nanoRemainder int64) {
-	now := time.Now()
-	unix = now.Unix()
-	nanoRemainder = now.UnixNano() - (unix * 1000000000)
-	return unix, nanoRemainder
+	return splitTimestamp(time.Now())
+}
+
+func splitTimestamp(ts time.Time) (unix int64, nanoRemainer int64) {
+	unix = ts.Unix()
+	nanoRemainer = ts.UnixNano() - (unix * 1000000000)
+	return unix, nanoRemainer
 }
 
 // NewNode creates a new Node object but does not initialize or start it
@@ -234,17 +243,24 @@ func (n *Node) execute(q string, txn bool) (leader bool, exerr error) {
 	return true, nil
 }
 
-func (n *Node) getRPCClient(leader string) (*DogoRPCExecuterClient, error) {
-	var c *DogoRPCExecuterClient
-	if val, ok := n.rpcCtxMap[leader]; ok {
+func (n *Node) getRPCClient() (DogoRPCExecuterClient, error) {
+	var c DogoRPCExecuterClient
+	if n.store.IsLeader() {
+		return nil, newInternalErrorError(fmt.Errorf("getRPCClient called but we are the leader"))
+	}
+	leader := n.store.Leader()
+	n.rpcCtx.RLock()
+	if val, ok := n.rpcCtx.ctxmap[leader]; ok {
 		s, err := val.conn.State()
 		if err != nil {
+			n.rpcCtx.RUnlock()
 			return c, err
 		}
 		if s == grpc.Ready || s == grpc.Idle {
-			c = n.rpcCtxMap[leader].client
+			c = n.rpcCtx.ctxmap[leader].client
 		}
 	}
+	n.rpcCtx.RUnlock()
 	if c == nil {
 		conn, err := grpc.Dial(leader, grpc.WithTimeout(rpcTimeoutSeconds*time.Second), grpc.WithBlock(), grpc.WithInsecure())
 		if err != nil {
@@ -253,38 +269,14 @@ func (n *Node) getRPCClient(leader string) (*DogoRPCExecuterClient, error) {
 		client := NewDogoRPCExecuterClient(conn)
 		rpcctx := rpcContext{
 			conn:   conn,
-			client: &client,
+			client: client,
 		}
-		n.rpcCtxMap[leader] = &rpcctx
-		c = &client
+		n.rpcCtx.Lock()
+		n.rpcCtx.ctxmap[leader] = &rpcctx
+		n.rpcCtx.Unlock()
+		c = client
 	}
 	return c, nil
-}
-
-// ProxyFetch determines cluster leader and performs a remote fetch from it
-func (n *Node) ProxyFetch(keys []string) ([]*Item, error) {
-	items := []*Item{}
-	if n.store.IsLeader() {
-		return items, newInternalErrorError(fmt.Errorf("ProxyFetch called but we are the leader"))
-	}
-	leader := n.store.Leader()
-	_, err := n.getRPCClient(leader)
-	if err != nil {
-		return items, newInternalErrorError(fmt.Errorf("ProxyFetch: error getting RPC connection: %v", err))
-	}
-	//c.FetchItems(ctx, in, opts)
-	return []*Item{}, nil
-}
-
-// ProxyStore determines cluster leader and performs a remote store
-func (n *Node) ProxyStore(item *Item, policy StorePolicy) error {
-	//leader := n.store.Leader()
-	return nil
-}
-
-// ProxyExpire determines cluster leader and performs a remote expiration
-func (n *Node) ProxyExpire(key string) error {
-	return nil
 }
 
 // ExpireValue deletes an expired value from the datastore
