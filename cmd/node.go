@@ -34,6 +34,7 @@ const (
 	muxRPCHeader  = 3
 )
 
+const waitForLeaderTimeoutSeconds = 30
 const rpcTimeoutSeconds = 30
 
 // Store operation semantics
@@ -199,6 +200,10 @@ func (n *Node) RunNode(block bool) error {
 		log.Fatalf("error checking tables: %v", err)
 	}
 
+	if err := n.createFuncs(); err != nil {
+		log.Fatalf("error creating functions: %v", err)
+	}
+
 	go n.listenRPC()
 
 	listen := func() error {
@@ -249,6 +254,13 @@ func (n *Node) getRPCClient() (DogoRPCExecuterClient, error) {
 		return nil, newInternalErrorError(fmt.Errorf("getRPCClient called but we are the leader"))
 	}
 	leader := n.store.Leader()
+	if leader == "" { // election pending
+		var err error
+		leader, err = n.store.WaitForLeader(waitForLeaderTimeoutSeconds * time.Second)
+		if err != nil {
+			return c, newInternalErrorError(fmt.Errorf("getRPCClient: timeout waiting for leader election"))
+		}
+	}
 	n.rpcCtx.RLock()
 	if val, ok := n.rpcCtx.ctxmap[leader]; ok {
 		s, err := val.conn.State()
@@ -279,15 +291,15 @@ func (n *Node) getRPCClient() (DogoRPCExecuterClient, error) {
 	return c, nil
 }
 
-// ExpireValue deletes an expired value from the datastore
-func (n *Node) ExpireValue(key string) error {
+// DeleteItem deletes a value from the datastore
+func (n *Node) DeleteItem(key string) error {
 	q := fmt.Sprintf("DELETE FROM key_value_map WHERE key = '%v';", key)
 	ldr, err := n.execute(q, false)
 	if err != nil {
 		return err
 	}
 	if !ldr {
-		return n.ProxyExpire(key)
+		return n.ProxyDelete(key)
 	}
 	return nil
 }
@@ -312,9 +324,8 @@ func getInt64(val interface{}) (int64, error) {
 
 func getValue(val interface{}) ([]byte, error) {
 	switch v := val.(type) {
-	case string: //wtf
-		log.Printf("val is a string: %v", v)
-		return []byte(v), nil
+	case []byte:
+		return v, nil
 	default:
 		return []byte{}, fmt.Errorf("unexpected type: %T", val)
 	}
@@ -365,7 +376,7 @@ func (n *Node) FetchItems(keys []string, clvl ConsistencyLevel) ([]*Item, error)
 		expires := time.Unix(exp, 0)
 		if exp != 0 && time.Now().After(expires) {
 			log.Printf("expiring value: %v", key)
-			go n.ExpireValue(key)
+			go n.DeleteItem(key)
 			continue
 		}
 		value, err := getValue(v[1])
@@ -555,4 +566,27 @@ func (n *Node) checkTables() error {
 		log.Printf("done with table creation")
 	}
 	return nil
+}
+
+const modifyBlobFuncs = `
+	CREATE OR REPLACE FUNCTION APPEND_BLOB(A IN BLOB, B IN BLOB) RETURN BLOB IS C BLOB;
+	BEGIN
+		dbms_lob.createtemporary(c, TRUE);
+	  DBMS_LOB.APPEND(c, A);
+	  DBMS_LOB.APPEND(c, B);
+	  RETURN c;
+	END;
+	CREATE OR REPLACE FUNCTION PREPEND_BLOB(A IN BLOB, B IN BLOB) RETURN BLOB IS C BLOB;
+	BEGIN
+		dbms_lob.createtemporary(c, TRUE);
+	  DBMS_LOB.APPEND(c, B);
+	  DBMS_LOB.APPEND(c, A);
+	  RETURN c;
+	END;
+`
+
+// create required functions
+func (n *Node) createFuncs() error {
+	_, err := n.store.Execute([]string{modifyBlobFuncs}, false, false)
+	return err
 }

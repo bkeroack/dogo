@@ -11,10 +11,6 @@ import (
 	"time"
 )
 
-const (
-	getq = "SELECT key, value, size_bytes, flags, exptime FROM key_value_map WHERE %v;"
-)
-
 type clientError interface {
 	ClientError() bool
 }
@@ -22,6 +18,14 @@ type clientError interface {
 type clientErr struct {
 	err error
 }
+
+// Static responses
+var storedBytes = []byte("STORED\r\n")
+var crlfBytes = []byte("\r\n")
+var endBytes = []byte("END\r\n")
+var errorBytes = []byte("ERROR\r\n")
+var deletedBytes = []byte("DELETED\r\n")
+var notfoundBytes = []byte("NOT_FOUND\r\n")
 
 func (ce clientErr) ClientError() bool {
 	return true
@@ -71,7 +75,7 @@ func (ch *memcacheHandler) clientError(err error) {
 
 func (ch *memcacheHandler) bareError(cmd string) {
 	log.Printf("unknown command from %v: %v", ch.conn.RemoteAddr(), cmd)
-	ch.conn.Write([]byte("ERROR\r\n"))
+	ch.conn.Write(errorBytes)
 }
 
 func (ch *memcacheHandler) doCmd(cmdfunc func([]string) error, cmdline []string) bool {
@@ -139,53 +143,53 @@ func (ch *memcacheHandler) NewConnection(n *Node, conn net.Conn) {
 		}
 		cmdline := strings.Split(raw, " ")
 		cmd := cmdline[0]
+		var cmdfunc func([]string) error
 		switch cmd {
 		case "get":
-			if !ch.doCmd(ch.get, cmdline) {
-				return
-			}
+			cmdfunc = ch.get
 		case "gets":
-			if !ch.doCmd(ch.get, cmdline) {
-				return
-			}
+			cmdfunc = ch.get
+		case "getc":
+			cmdfunc = ch.getc
 		case "set":
-			if !ch.doCmd(ch.set, cmdline) {
-				return
-			}
+			cmdfunc = ch.set
 		case "add":
-			ch.stub(cmdline)
+			cmdfunc = ch.add
 		case "replace":
-			ch.stub(cmdline)
+			cmdfunc = ch.replace
 		case "append":
-			ch.stub(cmdline)
+			cmdfunc = ch.stub
 		case "prepend":
-			ch.stub(cmdline)
+			cmdfunc = ch.stub
 		case "cas":
-			ch.stub(cmdline)
+			cmdfunc = ch.stub
 		case "delete":
-			ch.stub(cmdline)
+			cmdfunc = ch.delete
 		case "incr":
-			ch.stub(cmdline)
+			cmdfunc = ch.stub
 		case "decr":
-			ch.stub(cmdline)
+			cmdfunc = ch.stub
 		case "touch":
-			ch.stub(cmdline)
+			cmdfunc = ch.stub
 		case "slabs":
-			ch.stub(cmdline)
+			cmdfunc = ch.stub
 		case "lru_crawler":
-			ch.stub(cmdline)
+			cmdfunc = ch.stub
 		case "stats":
-			ch.stub(cmdline)
+			cmdfunc = ch.stub
 		case "flush_all":
-			ch.stub(cmdline)
+			cmdfunc = ch.stub
 		case "version":
-			ch.stub(cmdline)
+			cmdfunc = ch.stub
 		case "verbosity":
-			ch.stub(cmdline)
+			cmdfunc = ch.stub
 		case "quit":
 			return
 		default:
 			ch.bareError(cmd)
+		}
+		if !ch.doCmd(cmdfunc, cmdline) {
+			return
 		}
 	}
 }
@@ -201,12 +205,12 @@ func (ch *memcacheHandler) retrResponse(items []*Item) error {
 		if err != nil {
 			return err
 		}
-		_, err = ch.conn.Write([]byte("\r\n"))
+		_, err = ch.conn.Write(crlfBytes)
 		if err != nil {
 			return err
 		}
 	}
-	_, err := ch.conn.Write([]byte("END\r\n"))
+	_, err := ch.conn.Write(endBytes)
 	if err != nil {
 		return err
 	}
@@ -219,7 +223,6 @@ func (ch *memcacheHandler) stub(cmdline []string) error {
 }
 
 func (ch *memcacheHandler) get(cmdline []string) error {
-	log.Printf("%v", cmdline)
 	items, err := ch.n.FetchItems(cmdline[1:len(cmdline)], None)
 	if err != nil {
 		return err
@@ -227,8 +230,28 @@ func (ch *memcacheHandler) get(cmdline []string) error {
 	return ch.retrResponse(items)
 }
 
+// getc - "get consistently", extension to standard memcache command set
+func (ch *memcacheHandler) getc(cmdline []string) error {
+	items, err := ch.n.FetchItems(cmdline[1:len(cmdline)], Strong)
+	if err != nil {
+		return err
+	}
+	return ch.retrResponse(items)
+}
+
 func (ch *memcacheHandler) set(cmdline []string) error {
-	log.Printf("%v", cmdline)
+	return ch._store(cmdline, InsertOrUpdate)
+}
+
+func (ch *memcacheHandler) add(cmdline []string) error {
+	return ch._store(cmdline, InsertIfNotExists)
+}
+
+func (ch *memcacheHandler) replace(cmdline []string) error {
+	return ch._store(cmdline, UpdateIfExists)
+}
+
+func (ch *memcacheHandler) _store(cmdline []string, policy StorePolicy) error {
 	noreply := false
 	if len(cmdline) < 5 || len(cmdline) > 6 {
 		return newClientError(fmt.Errorf("malformed command string"))
@@ -265,15 +288,43 @@ func (ch *memcacheHandler) set(cmdline []string) error {
 		return newClientError(fmt.Errorf("data length (%v) does not equal declared length (%v)", len(data), size))
 	}
 	item.Value = data
-	err = ch.n.StoreItem(&item, InsertOrUpdate)
+	err = ch.n.StoreItem(&item, policy)
 	if err != nil {
 		return newInternalErrorError(fmt.Errorf("error storing item: %v", err))
 	}
 	if !noreply {
-		_, err = ch.conn.Write([]byte("STORED\r\n"))
+		_, err = ch.conn.Write(storedBytes)
 		if err != nil {
 			return fmt.Errorf("error writing STORED: %v", err)
 		}
 	}
 	return nil
+}
+
+func (ch *memcacheHandler) delete(cmdline []string) error {
+	noreply := false
+	if len(cmdline) < 2 || len(cmdline) > 3 {
+		return newClientError(fmt.Errorf("malformed command string"))
+	}
+	if len(cmdline) == 3 {
+		if cmdline[2] != "noreply" {
+			return newClientError(fmt.Errorf("expected noreply but got: %v", cmdline[2]))
+		}
+		noreply = true
+	}
+	err := ch.n.DeleteItem(cmdline[1])
+	if err != nil {
+		bq, ok := err.(BadQuery)
+		if ok && bq.BadQuery() {
+			log.Printf("delete response: %v", err)
+			if !noreply {
+				_, err = ch.conn.Write(notfoundBytes)
+				return err
+			}
+		}
+	}
+	if !noreply {
+		_, err = ch.conn.Write(deletedBytes)
+	}
+	return err
 }

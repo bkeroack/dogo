@@ -5,6 +5,7 @@ package cmd;
 service DogoRPCExecuter {
   rpc FetchItems (FetchItemsRequest) returns (FetchItemsResponse) {}
   rpc StoreItem (StoreItemRequest) returns (StoreItemResponse) {}
+  rpc DeleteItem (DeleteItemRequest) returns (DeleteItemResponse) {}
 }
 
 message RPCItem {
@@ -44,6 +45,14 @@ message StoreItemRequest {
   }
   StorePolicy store_policy = 1;
   RPCItem item = 2;
+}
+
+message DeleteItemRequest {
+  string name = 1;
+}
+
+message DeleteItemResponse {
+  RPCError rpc_error = 1;
 }
 
 message RPCError {

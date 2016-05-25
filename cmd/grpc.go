@@ -104,6 +104,25 @@ func (gr *grpcServer) StoreItem(ctx context.Context, req *StoreItemRequest) (*St
 	return &resp, nil
 }
 
+func (gr *grpcServer) DeleteItem(ctx context.Context, req *DeleteItemRequest) (*DeleteItemResponse, error) {
+	resp := DeleteItemResponse{}
+	if !gr.n.store.IsLeader() {
+		resp.RpcError.IsError = true
+		resp.RpcError.ErrorType = RPCError_NOT_LEADER
+		resp.RpcError.ErrorMessage = gr.n.store.Leader()
+		return &resp, nil
+	}
+	err := gr.n.DeleteItem(req.Name)
+	if err != nil {
+		resp.RpcError.IsError = true
+		resp.RpcError.ErrorType = RPCError_INTERNAL_ERROR
+		resp.RpcError.ErrorMessage = fmt.Sprintf("DeleteItem error: %v", err)
+		return &resp, nil
+	}
+	resp.RpcError.ErrorType = RPCError_NO_ERROR
+	return &resp, nil
+}
+
 func handleRPCError(caller string, rpcerr *RPCError) error {
 	switch rpcerr.ErrorType {
 	case RPCError_INTERNAL_ERROR:
@@ -197,7 +216,21 @@ func (n *Node) ProxyStore(item *Item, policy StorePolicy) error {
 	return nil
 }
 
-// ProxyExpire determines cluster leader and performs a remote expiration
-func (n *Node) ProxyExpire(key string) error {
+// ProxyDelete determines cluster leader and performs a remote deletion
+func (n *Node) ProxyDelete(key string) error {
+	c, err := n.getRPCClient()
+	if err != nil {
+		return newInternalErrorError(fmt.Errorf("ProxyDelete: error getting RPC connection: %v", err))
+	}
+	req := &DeleteItemRequest{
+		Name: key,
+	}
+	r, err := c.DeleteItem(context.TODO(), req, nil)
+	if err != nil {
+		return newInternalErrorError(fmt.Errorf("ProxyDelete: error executing RPC: %v", err))
+	}
+	if r.RpcError.IsError {
+		return handleRPCError("ProxyDelete", r.RpcError)
+	}
 	return nil
 }
