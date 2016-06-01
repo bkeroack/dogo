@@ -158,9 +158,9 @@ func (ch *memcacheHandler) NewConnection(n *Node, conn net.Conn) {
 		case "replace":
 			cmdfunc = ch.replace
 		case "append":
-			cmdfunc = ch.stub
+			cmdfunc = ch.appendOrPrepend
 		case "prepend":
-			cmdfunc = ch.stub
+			cmdfunc = ch.appendOrPrepend
 		case "cas":
 			cmdfunc = ch.stub
 		case "delete":
@@ -327,4 +327,48 @@ func (ch *memcacheHandler) delete(cmdline []string) error {
 		_, err = ch.conn.Write(deletedBytes)
 	}
 	return err
+}
+
+func (ch *memcacheHandler) appendOrPrepend(cmdline []string) error {
+	noreply := false
+	if len(cmdline) < 5 || len(cmdline) > 6 {
+		return newClientError(fmt.Errorf("malformed command string"))
+	}
+	if len(cmdline) == 6 {
+		if cmdline[5] != "noreply" {
+			return newClientError(fmt.Errorf("expected noreply but got: %v", cmdline[5]))
+		}
+		noreply = true
+	}
+	size, err := strconv.ParseInt(cmdline[4], 0, 64)
+	if err != nil || size < 1 {
+		return newClientError(fmt.Errorf("malformed data size (expected int64 >= 1)"))
+	}
+	item := Item{
+		Name: cmdline[1],
+		Size: uint64(size),
+	}
+	data, err := ch.readDataBlock()
+	if err != nil {
+		return err
+	}
+	if int64(len(data)) != size {
+		return newClientError(fmt.Errorf("data length (%v) does not equal declared length (%v)", len(data), size))
+	}
+	item.Value = data
+	if cmdline[0] == "append" {
+		err = ch.n.AppendItem(&item)
+	} else {
+		err = ch.n.PrependItem(&item)
+	}
+	if err != nil {
+		return newInternalErrorError(fmt.Errorf("error appending item: %v", err))
+	}
+	if !noreply {
+		_, err = ch.conn.Write(storedBytes)
+		if err != nil {
+			return fmt.Errorf("error writing STORED: %v", err)
+		}
+	}
+	return nil
 }

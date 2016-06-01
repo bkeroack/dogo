@@ -6,6 +6,8 @@ service DogoRPCExecuter {
   rpc FetchItems (FetchItemsRequest) returns (FetchItemsResponse) {}
   rpc StoreItem (StoreItemRequest) returns (StoreItemResponse) {}
   rpc DeleteItem (DeleteItemRequest) returns (DeleteItemResponse) {}
+  rpc AppendToItem (AppendToItemRequest) returns (AppendToItemResponse) {}
+  rpc PrependToItem (PrependToItemRequest) returns (PrependToItemResponse) {}
 }
 
 message RPCItem {
@@ -19,10 +21,21 @@ message RPCItem {
   int64 last_used_nano = 8;
 }
 
-message FetchItemsResponse {
-  RPCError rpc_error = 1;
-  repeated RPCItem items = 2;
+message RPCError {
+  enum ErrorType {
+    NO_ERROR = 0;
+    INTERNAL_ERROR = 1;
+    NOT_LEADER = 2;
+    BAD_REQUEST = 3;
+    UNKNOWN = 4;
+  }
+  bool is_error = 1;
+  ErrorType error_type = 2;
+  string error_message = 3;
 }
+
+
+// Requests
 
 message FetchItemsRequest {
   enum ConsistencyLevel {
@@ -31,10 +44,6 @@ message FetchItemsRequest {
   }
   ConsistencyLevel consistency_level = 1;
   repeated string names = 2;
-}
-
-message StoreItemResponse {
-  RPCError rpc_error = 1;
 }
 
 message StoreItemRequest {
@@ -51,19 +60,33 @@ message DeleteItemRequest {
   string name = 1;
 }
 
+message AppendToItemRequest {
+  RPCItem item = 1;
+}
+
+message PrependToItemRequest {
+  RPCItem item = 1;
+}
+
+// Responses
+
+message FetchItemsResponse {
+  RPCError rpc_error = 1;
+  repeated RPCItem items = 2;
+}
+
+message StoreItemResponse {
+  RPCError rpc_error = 1;
+}
+
 message DeleteItemResponse {
   RPCError rpc_error = 1;
 }
 
-message RPCError {
-  enum ErrorType {
-    NO_ERROR = 0;
-    INTERNAL_ERROR = 1;
-    NOT_LEADER = 2;
-    BAD_REQUEST = 3;
-    UNKNOWN = 4;
-  }
-  bool is_error = 1;
-  ErrorType error_type = 2;
-  string error_message = 3;
+message AppendToItemResponse {
+  RPCError rpc_error = 1;
+}
+
+message PrependToItemResponse {
+  RPCError rpc_error = 1;
 }

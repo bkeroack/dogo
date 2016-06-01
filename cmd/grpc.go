@@ -123,6 +123,52 @@ func (gr *grpcServer) DeleteItem(ctx context.Context, req *DeleteItemRequest) (*
 	return &resp, nil
 }
 
+func (gr *grpcServer) AppendToItem(ctx context.Context, req *AppendToItemRequest) (*AppendToItemResponse, error) {
+	resp := AppendToItemResponse{}
+	if !gr.n.store.IsLeader() {
+		resp.RpcError.IsError = true
+		resp.RpcError.ErrorType = RPCError_NOT_LEADER
+		resp.RpcError.ErrorMessage = gr.n.store.Leader()
+		return &resp, nil
+	}
+	item := &Item{
+		Name:  req.Item.Name,
+		Value: req.Item.Value,
+	}
+	err := gr.n.AppendItem(item)
+	if err != nil {
+		resp.RpcError.IsError = true
+		resp.RpcError.ErrorType = RPCError_INTERNAL_ERROR
+		resp.RpcError.ErrorMessage = fmt.Sprintf("AppendItem error: %v", err)
+		return &resp, nil
+	}
+	resp.RpcError.ErrorType = RPCError_NO_ERROR
+	return &resp, nil
+}
+
+func (gr *grpcServer) PrependToItem(ctx context.Context, req *PrependToItemRequest) (*PrependToItemResponse, error) {
+	resp := PrependToItemResponse{}
+	if !gr.n.store.IsLeader() {
+		resp.RpcError.IsError = true
+		resp.RpcError.ErrorType = RPCError_NOT_LEADER
+		resp.RpcError.ErrorMessage = gr.n.store.Leader()
+		return &resp, nil
+	}
+	item := &Item{
+		Name:  req.Item.Name,
+		Value: req.Item.Value,
+	}
+	err := gr.n.PrependItem(item)
+	if err != nil {
+		resp.RpcError.IsError = true
+		resp.RpcError.ErrorType = RPCError_INTERNAL_ERROR
+		resp.RpcError.ErrorMessage = fmt.Sprintf("PrependItem error: %v", err)
+		return &resp, nil
+	}
+	resp.RpcError.ErrorType = RPCError_NO_ERROR
+	return &resp, nil
+}
+
 func handleRPCError(caller string, rpcerr *RPCError) error {
 	switch rpcerr.ErrorType {
 	case RPCError_INTERNAL_ERROR:
@@ -231,6 +277,52 @@ func (n *Node) ProxyDelete(key string) error {
 	}
 	if r.RpcError.IsError {
 		return handleRPCError("ProxyDelete", r.RpcError)
+	}
+	return nil
+}
+
+// ProxyAppend determines cluster leader and performs a remote append
+func (n *Node) ProxyAppend(item *Item) error {
+	c, err := n.getRPCClient()
+	if err != nil {
+		return newInternalErrorError(fmt.Errorf("ProxyAppend: error getting RPC connection: %v", err))
+	}
+	ritem := RPCItem{
+		Name:  item.Name,
+		Value: item.Value,
+	}
+	req := &AppendToItemRequest{
+		Item: &ritem,
+	}
+	r, err := c.AppendToItem(context.TODO(), req, nil)
+	if err != nil {
+		return newInternalErrorError(fmt.Errorf("ProxyAppend: error executing RPC: %v", err))
+	}
+	if r.RpcError.IsError {
+		return handleRPCError("ProxyAppend", r.RpcError)
+	}
+	return nil
+}
+
+// ProxyPrepend determines cluster leader and performs a remote prepend
+func (n *Node) ProxyPrepend(item *Item) error {
+	c, err := n.getRPCClient()
+	if err != nil {
+		return newInternalErrorError(fmt.Errorf("ProxyPrepend: error getting RPC connection: %v", err))
+	}
+	ritem := RPCItem{
+		Name:  item.Name,
+		Value: item.Value,
+	}
+	req := &PrependToItemRequest{
+		Item: &ritem,
+	}
+	r, err := c.PrependToItem(context.TODO(), req, nil)
+	if err != nil {
+		return newInternalErrorError(fmt.Errorf("ProxyPrepend: error executing RPC: %v", err))
+	}
+	if r.RpcError.IsError {
+		return handleRPCError("ProxyPrepend", r.RpcError)
 	}
 	return nil
 }

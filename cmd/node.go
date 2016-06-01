@@ -406,6 +406,36 @@ func (n *Node) FetchItems(keys []string, clvl ConsistencyLevel) ([]*Item, error)
 	return items, nil
 }
 
+// AppendItem appends the supplied data to an existing key
+func (n *Node) AppendItem(item *Item) error {
+	unix, nano := nowTimestamp()
+	q := `UPDATE key_value_map SET value = APPEND_BLOB(value, X'%v'), last_used = %v, last_used_nano = %v WHERE key = '%v';`
+	q = fmt.Sprintf(q, hex.EncodeToString(item.Value), unix, nano, item.Name)
+	ldr, err := n.execute(q, false)
+	if err != nil {
+		return fmt.Errorf("error running node execute: %v", err)
+	}
+	if !ldr {
+		return n.ProxyAppend(item)
+	}
+	return nil
+}
+
+// PrependItem prepends the supplied data to an existing key
+func (n *Node) PrependItem(item *Item) error {
+	unix, nano := nowTimestamp()
+	q := `UPDATE key_value_map SET value = PREPEND_BLOB(value, X'%v'), last_used = %v, last_used_nano = %v WHERE key = '%v';`
+	q = fmt.Sprintf(q, hex.EncodeToString(item.Value), unix, nano, item.Name)
+	ldr, err := n.execute(q, false)
+	if err != nil {
+		return fmt.Errorf("error running node execute: %v", err)
+	}
+	if !ldr {
+		return n.ProxyPrepend(item)
+	}
+	return nil
+}
+
 //StoreItem stores an item in the datastore.
 // replace: overwrite item if it already exists, otherwise return error
 // implementing KeyExists
