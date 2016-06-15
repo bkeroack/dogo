@@ -13,6 +13,7 @@ import (
 
 const (
 	connectionTimeoutSecs = 60
+	noreplyStr            = "noreply"
 )
 
 type clientError interface {
@@ -30,6 +31,7 @@ var endBytes = []byte("END\r\n")
 var errorBytes = []byte("ERROR\r\n")
 var deletedBytes = []byte("DELETED\r\n")
 var notfoundBytes = []byte("NOT_FOUND\r\n")
+var existsBytes = []byte("EXISTS\r\n")
 
 func (ce clientErr) ClientError() bool {
 	return true
@@ -166,7 +168,7 @@ func (ch *memcacheHandler) NewConnection(n *Node, conn net.Conn) {
 		case "prepend":
 			cmdfunc = ch.appendOrPrepend
 		case "cas":
-			cmdfunc = ch.stub
+			cmdfunc = ch.cas
 		case "delete":
 			cmdfunc = ch.delete
 		case "incr":
@@ -262,7 +264,7 @@ func (ch *memcacheHandler) _store(cmdline []string, policy StorePolicy) error {
 		return newClientError(fmt.Errorf("malformed command string"))
 	}
 	if len(cmdline) == 6 {
-		if cmdline[5] != "noreply" {
+		if cmdline[5] != noreplyStr {
 			return newClientError(fmt.Errorf("expected noreply but got: %v", cmdline[5]))
 		}
 		noreply = true
@@ -312,7 +314,7 @@ func (ch *memcacheHandler) delete(cmdline []string) error {
 		return newClientError(fmt.Errorf("malformed command string"))
 	}
 	if len(cmdline) == 3 {
-		if cmdline[2] != "noreply" {
+		if cmdline[2] != noreplyStr {
 			return newClientError(fmt.Errorf("expected noreply but got: %v", cmdline[2]))
 		}
 		noreply = true
@@ -340,7 +342,7 @@ func (ch *memcacheHandler) appendOrPrepend(cmdline []string) error {
 		return newClientError(fmt.Errorf("malformed command string"))
 	}
 	if len(cmdline) == 6 {
-		if cmdline[5] != "noreply" {
+		if cmdline[5] != noreplyStr {
 			return newClientError(fmt.Errorf("expected noreply but got: %v", cmdline[5]))
 		}
 		noreply = true
@@ -373,6 +375,51 @@ func (ch *memcacheHandler) appendOrPrepend(cmdline []string) error {
 		_, err = ch.conn.Write(storedBytes)
 		if err != nil {
 			return fmt.Errorf("error writing STORED: %v", err)
+		}
+	}
+	return nil
+}
+
+func (ch *memcacheHandler) cas(cmdline []string) error {
+	noreply := false
+	if len(cmdline) < 6 || len(cmdline) > 7 {
+		return newClientError(fmt.Errorf("malformed command string"))
+	}
+	if len(cmdline) == 7 {
+		if cmdline[6] != "noreply" {
+			return newClientError(fmt.Errorf("expected noreply but got: %v", cmdline[6]))
+		}
+		noreply = true
+	}
+	casunique := cmdline[5]
+	size, err := strconv.ParseInt(cmdline[4], 0, 64)
+	if err != nil || size < 1 {
+		return newClientError(fmt.Errorf("malformed data size (expected int64 >= 1)"))
+	}
+	item := Item{
+		Name: cmdline[1],
+		Size: uint64(size),
+	}
+	data, err := ch.readDataBlock()
+	if err != nil {
+		return err
+	}
+	if int64(len(data)) != size {
+		return newClientError(fmt.Errorf("data length (%v) does not equal declared length (%v)", len(data), size))
+	}
+	item.Value = data
+	ok, err := ch.n.CASItem(&item, []byte(casunique))
+	if err != nil {
+		return newInternalErrorError(fmt.Errorf("error CAS item: %v", err))
+	}
+	if !noreply {
+		if ok {
+			_, err = ch.conn.Write(storedBytes)
+		} else {
+			_, err = ch.conn.Write(existsBytes)
+		}
+		if err != nil {
+			return fmt.Errorf("cas: error writing response: %v", err)
 		}
 	}
 	return nil

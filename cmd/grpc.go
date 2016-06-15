@@ -169,6 +169,11 @@ func (gr *grpcServer) PrependToItem(ctx context.Context, req *PrependToItemReque
 	return &resp, nil
 }
 
+func (gr *grpcServer) CASItem(ctx context.Context, req *CASItemRequest) (*CASItemResponse, error) {
+	resp := CASItemResponse{}
+	return &resp, nil
+}
+
 func handleRPCError(caller string, rpcerr *RPCError) error {
 	switch rpcerr.ErrorType {
 	case RPCError_INTERNAL_ERROR:
@@ -324,5 +329,10 @@ func (n *Node) ProxyPrepend(item *Item) error {
 	if r.RpcError.IsError {
 		return handleRPCError("ProxyPrepend", r.RpcError)
 	}
+	return nil
+}
+
+// ProxyCASItem determines cluster leader and performs a remote CAS item
+func (n *Node) ProxyCASItem(item *Item, casUnique []byte) error {
 	return nil
 }

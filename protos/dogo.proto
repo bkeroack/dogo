@@ -8,6 +8,7 @@ service DogoRPCExecuter {
   rpc DeleteItem (DeleteItemRequest) returns (DeleteItemResponse) {}
   rpc AppendToItem (AppendToItemRequest) returns (AppendToItemResponse) {}
   rpc PrependToItem (PrependToItemRequest) returns (PrependToItemResponse) {}
+  rpc CASItem (CASItemRequest) returns (CASItemResponse) {}
 }
 
 message RPCItem {
@@ -68,6 +69,11 @@ message PrependToItemRequest {
   RPCItem item = 1;
 }
 
+message CASItemRequest {
+  RPCItem item = 1;
+  bytes cas_unique = 2;
+}
+
 // Responses
 
 message FetchItemsResponse {
@@ -89,4 +95,8 @@ message AppendToItemResponse {
 
 message PrependToItemResponse {
   RPCError rpc_error = 1;
+}
+
+message CASItemResponse {
+  bool ok = 1;
 }

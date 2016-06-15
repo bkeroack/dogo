@@ -522,6 +522,12 @@ func (n *Node) storeUpdateIfExists(item *Item) error {
 	return nil
 }
 
+// CASItem stores the Item if and only if it currently exists and holds the
+// value casUnique
+func (n *Node) CASItem(item *Item, casUnique []byte) (bool, error) {
+	return true, nil
+}
+
 // copypasta
 // https://github.com/otoolep/rqlite/blob/master/cmd/rqlited/main.go
 func (n *Node) join() error {
