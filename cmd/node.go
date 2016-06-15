@@ -200,10 +200,6 @@ func (n *Node) RunNode(block bool) error {
 		log.Fatalf("error checking tables: %v", err)
 	}
 
-	if err := n.createFuncs(); err != nil {
-		log.Fatalf("error creating functions: %v", err)
-	}
-
 	go n.listenRPC()
 
 	listen := func() error {
@@ -409,7 +405,7 @@ func (n *Node) FetchItems(keys []string, clvl ConsistencyLevel) ([]*Item, error)
 // AppendItem appends the supplied data to an existing key
 func (n *Node) AppendItem(item *Item) error {
 	unix, nano := nowTimestamp()
-	q := `UPDATE key_value_map SET value = APPEND_BLOB(value, X'%v'), last_used = %v, last_used_nano = %v WHERE key = '%v';`
+	q := `UPDATE key_value_map SET value = COALESCE(value, X'') || COALESCE(X'%v', X''), last_used = %v, last_used_nano = %v WHERE key = '%v';`
 	q = fmt.Sprintf(q, hex.EncodeToString(item.Value), unix, nano, item.Name)
 	ldr, err := n.execute(q, false)
 	if err != nil {
@@ -424,7 +420,7 @@ func (n *Node) AppendItem(item *Item) error {
 // PrependItem prepends the supplied data to an existing key
 func (n *Node) PrependItem(item *Item) error {
 	unix, nano := nowTimestamp()
-	q := `UPDATE key_value_map SET value = PREPEND_BLOB(value, X'%v'), last_used = %v, last_used_nano = %v WHERE key = '%v';`
+	q := `UPDATE key_value_map SET value = COALESCE(X'%v', X'') || COALESCE(value, X''), last_used = %v, last_used_nano = %v WHERE key = '%v';`
 	q = fmt.Sprintf(q, hex.EncodeToString(item.Value), unix, nano, item.Name)
 	ldr, err := n.execute(q, false)
 	if err != nil {
@@ -596,27 +592,4 @@ func (n *Node) checkTables() error {
 		log.Printf("done with table creation")
 	}
 	return nil
-}
-
-const modifyBlobFuncs = `
-	CREATE OR REPLACE FUNCTION APPEND_BLOB(A IN BLOB, B IN BLOB) RETURN BLOB IS C BLOB;
-	BEGIN
-		dbms_lob.createtemporary(c, TRUE);
-	  DBMS_LOB.APPEND(c, A);
-	  DBMS_LOB.APPEND(c, B);
-	  RETURN c;
-	END;
-	CREATE OR REPLACE FUNCTION PREPEND_BLOB(A IN BLOB, B IN BLOB) RETURN BLOB IS C BLOB;
-	BEGIN
-		dbms_lob.createtemporary(c, TRUE);
-	  DBMS_LOB.APPEND(c, B);
-	  DBMS_LOB.APPEND(c, A);
-	  RETURN c;
-	END;
-`
-
-// create required functions
-func (n *Node) createFuncs() error {
-	_, err := n.store.Execute([]string{modifyBlobFuncs}, false, false)
-	return err
 }

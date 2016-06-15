@@ -11,6 +11,10 @@ import (
 	"time"
 )
 
+const (
+	connectionTimeoutSecs = 60
+)
+
 type clientError interface {
 	ClientError() bool
 }
@@ -107,7 +111,7 @@ func (ch *memcacheHandler) doCmd(cmdfunc func([]string) error, cmdline []string)
 }
 
 func (ch *memcacheHandler) scanBlock() error {
-	ch.conn.SetDeadline(time.Now().Add(10 * time.Second))
+	ch.conn.SetDeadline(time.Now().Add(connectionTimeoutSecs * time.Second))
 	if ok := ch.scanner.Scan(); !ok || ch.scanner.Err() != nil {
 		return ch.scanner.Err()
 	}
@@ -187,6 +191,7 @@ func (ch *memcacheHandler) NewConnection(n *Node, conn net.Conn) {
 			return
 		default:
 			ch.bareError(cmd)
+			continue
 		}
 		if !ch.doCmd(cmdfunc, cmdline) {
 			return
