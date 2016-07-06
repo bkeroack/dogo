@@ -244,6 +244,20 @@ func (n *Node) execute(q string, txn bool) (leader bool, exerr error) {
 	return true, nil
 }
 
+func (n *Node) executeWithRowsAffected(q string, txn bool) (leader bool, ra int64, exerr error) {
+	res, err := n.store.Execute([]string{q}, false, txn)
+	if err != nil {
+		if err == rqlite.ErrNotLeader {
+			return false, 0, nil
+		}
+		return true, 0, newInternalErrorError(err)
+	}
+	if res[0].Error != "" {
+		return true, 0, newBadQueryError(fmt.Errorf(res[0].Error))
+	}
+	return true, res[0].RowsAffected, nil
+}
+
 func (n *Node) getRPCClient() (DogoRPCExecuterClient, error) {
 	var c DogoRPCExecuterClient
 	if n.store.IsLeader() {
@@ -525,7 +539,25 @@ func (n *Node) storeUpdateIfExists(item *Item) error {
 // CASItem stores the Item if and only if it currently exists and holds the
 // value casUnique
 func (n *Node) CASItem(item *Item, casUnique []byte) (bool, error) {
-	return true, nil
+	q := `UPDATE OR IGNORE key_value_map SET %v WHERE key = '%v' AND value = '%v';`
+	unix, nano := nowTimestamp()
+	columns := []string{
+		fmt.Sprintf("value = X'%v'", hex.EncodeToString(item.Value)),
+		fmt.Sprintf("size_bytes = %v", item.Size),
+		fmt.Sprintf("flags = %v", item.Flags),
+		fmt.Sprintf("exptime = %v", item.Expiration.Unix()),
+		fmt.Sprintf("last_used = %v", unix),
+		fmt.Sprintf("last_used_nano = %v", nano),
+	}
+	q = fmt.Sprintf(q, strings.Join(columns, ", "), item.Name, hex.EncodeToString(casUnique))
+	ldr, ra, err := n.executeWithRowsAffected(q, false)
+	if err != nil {
+		return false, fmt.Errorf("error running node execute: %v", err)
+	}
+	if !ldr {
+		return n.ProxyCASItem(item, casUnique)
+	}
+	return ra > 0, nil
 }
 
 // copypasta

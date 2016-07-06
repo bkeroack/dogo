@@ -333,6 +333,6 @@ func (n *Node) ProxyPrepend(item *Item) error {
 }
 
 // ProxyCASItem determines cluster leader and performs a remote CAS item
-func (n *Node) ProxyCASItem(item *Item, casUnique []byte) error {
-	return nil
+func (n *Node) ProxyCASItem(item *Item, casUnique []byte) (bool, error) {
+	return false, nil
 }
